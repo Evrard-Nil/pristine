@@ -1,11 +1,9 @@
 use crate::config::Config;
 use anyhow::{Result, anyhow};
-use octocrab::models::issues::{Comment, Issue};
 use openai::{
     Credentials,
     chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
 };
-use serde::{Deserialize, Serialize};
 
 pub struct LlmClient {
     model_name: String,
