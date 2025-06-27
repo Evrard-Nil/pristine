@@ -6,6 +6,7 @@ use openai::{
     chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
 };
 use std::sync::Arc;
+use tokio::time::{Duration, sleep};
 
 pub struct LlmClient {
     model_name: String,
@@ -92,7 +93,32 @@ impl LlmClient {
             },
         ];
 
-        let result = self.call_llm(messages).await;
+        let mut attempts = 0;
+        let mut delay = Duration::from_secs(4);
+        let result;
+
+        loop {
+            attempts += 1;
+            let call_result = self.call_llm(messages.clone()).await;
+
+            if call_result.is_ok() {
+                result = call_result;
+                break;
+            }
+
+            if attempts >= 5 {
+                result = call_result; // Return the last error
+                break;
+            }
+
+            eprintln!(
+                "LLM call failed (attempt {}/5). Retrying in {:?}. Error: {:?}",
+                attempts, delay, call_result
+            );
+            sleep(delay).await;
+            delay *= 2;
+        }
+
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
         // Log the LLM call if monitor is available
