@@ -1,10 +1,12 @@
 use octocrab::models::IssueState;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::actions::{Actions, action_system_prompt, thinking_system_prompt};
 use crate::config;
 use crate::github;
 use crate::llm;
+use crate::monitoring::Monitor;
 use crate::repository;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -40,6 +42,7 @@ pub struct Agent {
     github: github::GitHubClient,
     repo: repository::RepositoryManager,
     llm: llm::LlmClient,
+    monitor: Arc<Monitor>,
     current_issues: Vec<octocrab::models::issues::Issue>,
     current_open_issues_title: Vec<(u64, String)>,
     known_issues: HashMap<u64, (String, chrono::DateTime<chrono::Utc>)>, // issue_number -> (last_body, last_updated)
@@ -51,7 +54,9 @@ impl Agent {
         let github = github::GitHubClient::new(config).await?;
         let (repo_dir, repo) = github.clone_repository().await?;
         let repo = repository::RepositoryManager::new(repo_dir, repo, config)?;
-        let llm = llm::LlmClient::new(config)?;
+        let mut llm = llm::LlmClient::new(config)?;
+        let monitor = Arc::new(Monitor::new());
+        llm.set_monitor(monitor.clone());
         let current_issues = github.list_all_issues(None).await?;
         let current_open_issues_title = current_issues
             .iter()
@@ -84,6 +89,7 @@ impl Agent {
             github,
             repo,
             llm,
+            monitor,
             last_action_output: None,
             last_thought: None,
             new_event: Vec::new(),
@@ -105,6 +111,10 @@ impl Agent {
 
     pub fn remove_memory(&mut self, key: &str) {
         self.memories.remove(key);
+    }
+
+    pub fn get_monitor(&self) -> Arc<Monitor> {
+        self.monitor.clone()
     }
 
     pub async fn check_for_events(&mut self) -> Vec<Event> {
@@ -303,6 +313,9 @@ impl Agent {
 
     pub async fn act(&mut self, action: Actions) {
         println!("Acting on action: {:?}", action);
+        let start_time = std::time::Instant::now();
+        let action_clone = action.clone();
+
         match action {
             Actions::ReadAllTheCodeBase => {
                 let code = self.repo.read_all_code().await.unwrap_or_default();
@@ -441,5 +454,10 @@ impl Agent {
                 println!("Woke up after {} seconds.", duration);
             }
         }
+
+        // Log the action execution
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+        self.monitor
+            .log_action(action_clone, self.last_action_output.clone(), duration_ms);
     }
 }

@@ -1,14 +1,17 @@
 use crate::config::Config;
+use crate::monitoring::Monitor;
 use anyhow::{Result, anyhow};
 use openai::{
     Credentials,
     chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
 };
+use std::sync::Arc;
 
 pub struct LlmClient {
     model_name: String,
     api_key_present: bool,
     credentials: Credentials,
+    monitor: Option<Arc<Monitor>>,
 }
 
 impl LlmClient {
@@ -27,6 +30,7 @@ impl LlmClient {
             api_key_present: !config.openai_api_key.is_empty()
                 || std::env::var("OPENAI_KEY").is_ok(),
             credentials,
+            monitor: None,
         })
     }
 
@@ -62,7 +66,13 @@ impl LlmClient {
         Ok(content)
     }
 
+    pub fn set_monitor(&mut self, monitor: Arc<Monitor>) {
+        self.monitor = Some(monitor);
+    }
+
     pub async fn generate_text(&self, system_prompt: &str, user_prompt: &str) -> Result<String> {
+        let start_time = std::time::Instant::now();
+
         let messages = vec![
             ChatCompletionMessage {
                 role: ChatCompletionMessageRole::System,
@@ -81,6 +91,23 @@ impl LlmClient {
                 tool_calls: None,
             },
         ];
-        self.call_llm(messages).await
+
+        let result = self.call_llm(messages).await;
+        let duration_ms = start_time.elapsed().as_millis() as u64;
+
+        // Log the LLM call if monitor is available
+        if let Some(monitor) = &self.monitor {
+            if let Ok(ref response) = result {
+                monitor.log_llm_call(
+                    system_prompt.to_string(),
+                    user_prompt.to_string(),
+                    response.clone(),
+                    duration_ms,
+                    self.model_name.clone(),
+                );
+            }
+        }
+
+        result
     }
 }
