@@ -47,6 +47,7 @@ A few rules to follow:
 - Only create issues for most relevant problems.
 - Not creating issues is an option, if you think no action is needed.
 - Use history of issues to understand user preferences and avoid creating duplicate issues.
+- The code and documentation may be wrong sometimes, do not always take it at face value.
 
 Actions you can take:
 "#;
