@@ -55,3 +55,7 @@ The Pristine agent follows a clear separation of concerns, with distinct modules
 -   **`WebServer` (`src/web_server.rs`)**: A lightweight HTTP server that exposes the `Monitor`'s data through a simple web dashboard, providing a visual interface for observing the agent's behavior.
 
 The application leverages Rust's strong type system and concurrency features (via `tokio`) to build a robust and performant autonomous agent. Error handling is managed using `anyhow` for consistent error propagation.
+
+## Next steps
+- **MCP filesysem server**
+- 
