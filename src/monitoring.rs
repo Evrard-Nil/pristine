@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 pub struct ActionLog {
     pub timestamp: DateTime<Utc>,
     pub action: Actions,
-    pub result: Option<String>,
+    pub result: String,
     pub duration_ms: u64,
 }
 
@@ -35,7 +35,7 @@ impl Monitor {
         }
     }
 
-    pub fn log_action(&self, action: Actions, result: Option<String>, duration_ms: u64) {
+    pub fn log_action(&self, action: Actions, result: String, duration_ms: u64) {
         let log = ActionLog {
             timestamp: Utc::now(),
             action,

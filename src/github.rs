@@ -3,18 +3,46 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc}; // Use chrono directly
 use git2::Repository;
 use octocrab::Octocrab;
-use octocrab::models::{
-    AppId, InstallationToken, IssueState,
-    issues::{Comment, Issue},
-};
+use octocrab::models::{AppId, InstallationToken, IssueState, issues::Comment};
 use octocrab::params::Direction;
 use octocrab::params::apps::CreateInstallationAccessToken;
-use octocrab::params::issues::Sort::Updated; // For sorting issues
+use octocrab::params::issues::Sort::{self, Updated}; // For sorting issues
 use serde_json;
+use std::fmt::Display;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 use url::Url;
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Issue {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub state: String,
+    pub updated_at: DateTime<Utc>,
+    pub labels: Vec<String>,
+    pub comments: Vec<String>,
+    pub comments_count: usize, // Added to track the number of comments
+}
+
+impl Display for Issue {
+    /// Formats the issue for adding to the context prompt.
+    /// We add all the relevant fields to the prompt.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Issue #{}: {}\nState: {}\nUpdated at: {}\nLabels: {:?}\nBody: {}\nComments and Updates: {:?}",
+            self.number,
+            self.title,
+            self.state,
+            self.updated_at.to_rfc3339(),
+            self.labels,
+            self.body,
+            self.comments
+        )
+    }
+}
 
 pub struct GitHubClient {
     pub octocrab: Arc<Mutex<Octocrab>>,
@@ -180,6 +208,8 @@ impl GitHubClient {
             let issues_page = octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .list()
+                .per_page(100)
+                .sort(octocrab::params::issues::Sort::Updated)
                 .state(octocrab::params::State::Open)
                 .send()
                 .await
@@ -189,7 +219,30 @@ impl GitHubClient {
                 "Repository issues retrieved successfully. Count: {}",
                 issues_page.items.len()
             );
-            Ok(issues_page.items)
+            let mut issues = vec![];
+            for item in issues_page.items {
+                let mut issue = Issue {
+                    number: item.number,
+                    title: item.title,
+                    body: item.body.unwrap_or_default(),
+                    state: match item.state {
+                        IssueState::Open => "open".to_string(),
+                        IssueState::Closed => "closed".to_string(),
+                        _ => "unknown".to_string(),
+                    },
+                    updated_at: item.updated_at,
+                    labels: item.labels.iter().map(|l| l.name.clone()).collect(),
+                    comments: vec![],
+                    comments_count: item.comments as usize,
+                };
+                let comments = self.get_issue_comments(item.number).await?;
+                for comment in comments {
+                    issue.comments.push(comment.body.unwrap_or("".to_string()));
+                }
+                issues.push(issue);
+            }
+            println!("Parsed {} issues from the response.", issues.len());
+            Ok(issues)
         })
         .await
     }
@@ -218,96 +271,6 @@ impl GitHubClient {
             repo_dir.path().display()
         );
         Ok((repo_dir, repo))
-    }
-
-    #[allow(dead_code)]
-    pub async fn find_archivable_issues(
-        &self,
-        inactivity_days: u64,
-        stale_label: Option<String>,
-    ) -> Result<Vec<Issue>> {
-        let mut archivable_issues = Vec::new();
-        let mut page = 1u32;
-
-        let now: DateTime<Utc> = Utc::now();
-        let inactivity_threshold_date: DateTime<Utc> =
-            now - chrono::Duration::days(inactivity_days as i64);
-
-        println!(
-            "Searching for issues with no activity since {} ({} days ago)",
-            inactivity_threshold_date.to_rfc3339(),
-            inactivity_days
-        );
-
-        loop {
-            let current_page = page;
-            let label_clone = stale_label.clone();
-
-            let issue_page = self
-                .execute_with_retry(|| async {
-                    let octocrab = self.octocrab.lock().await;
-                    if let Some(label_str) = &label_clone {
-                        println!("Filtering by label: {}", label_str);
-                        let labels_param = vec![label_str.clone()];
-                        octocrab
-                            .issues(&self.repo_owner, &self.repo_name)
-                            .list()
-                            .state(octocrab::params::State::Open)
-                            .sort(Updated)
-                            .direction(Direction::Ascending)
-                            .per_page(100)
-                            .page(current_page)
-                            .labels(&labels_param)
-                            .send()
-                            .await
-                    } else {
-                        octocrab
-                            .issues(&self.repo_owner, &self.repo_name)
-                            .list()
-                            .state(octocrab::params::State::Open)
-                            .sort(Updated)
-                            .direction(Direction::Ascending)
-                            .per_page(100)
-                            .page(current_page)
-                            .send()
-                            .await
-                    }
-                    .context(format!(
-                        "Failed to list open issues for archival check (page {})",
-                        current_page
-                    ))
-                })
-                .await?;
-
-            if issue_page.items.is_empty() {
-                break;
-            }
-
-            for issue in issue_page.items {
-                let updated_at_value = issue.updated_at;
-
-                if updated_at_value < inactivity_threshold_date {
-                    println!(
-                        "  Found potential candidate for archival: Issue #{} - '{}', last updated: {}",
-                        issue.number,
-                        issue.title,
-                        updated_at_value.to_rfc3339()
-                    );
-                    archivable_issues.push(issue);
-                }
-            }
-
-            if issue_page.next.is_none() {
-                break;
-            }
-            page += 1;
-        }
-
-        println!(
-            "Found {} potential issues for archival.",
-            archivable_issues.len()
-        );
-        Ok(archivable_issues)
     }
 
     pub async fn delete_issue(&self, issue_number: u64) -> Result<()> {
@@ -419,8 +382,18 @@ impl GitHubClient {
         .await
     }
 
-    pub async fn list_all_issues(&self, state: Option<String>) -> Result<Vec<Issue>> {
+    pub async fn list_all_issues(
+        &self,
+        state: Option<String>,
+        known_issues: &[Issue],
+    ) -> Result<(Vec<Issue>, bool, bool)> {
+        let known_issues_map: std::collections::HashMap<u64, &Issue> = known_issues
+            .into_iter()
+            .map(|issue| (issue.number, issue))
+            .collect();
         let mut all_issues = Vec::new();
+        let mut new_issues = false;
+        let mut updated_issues = false;
 
         match state.as_deref() {
             Some("open") => {
@@ -434,7 +407,7 @@ impl GitHubClient {
                                 .issues(&self.repo_owner, &self.repo_name)
                                 .list()
                                 .state(octocrab::params::State::Open)
-                                .sort(Updated)
+                                .sort(Sort::Created)
                                 .direction(Direction::Descending)
                                 .per_page(100)
                                 .page(current_page)
@@ -572,17 +545,73 @@ impl GitHubClient {
         }
 
         println!("Fetched {} issues", all_issues.len());
-        Ok(all_issues)
+        // Convert octocrab::models::Issue to our Issue struct
+        let mut all_issues = all_issues
+            .into_iter()
+            .map(|item| Issue {
+                number: item.number,
+                title: item.title,
+                body: item.body.unwrap_or_default(),
+                state: match item.state {
+                    IssueState::Open => "open".to_string(),
+                    IssueState::Closed => "closed".to_string(),
+                    _ => "unknown".to_string(),
+                },
+                updated_at: item.updated_at,
+                labels: item.labels.iter().map(|l| l.name.clone()).collect(),
+                comments: vec![],
+                comments_count: item.comments as usize,
+            })
+            .collect::<Vec<Issue>>();
+
+        println!("Parsed {} issues from the response.", all_issues.len());
+        for issue in &mut all_issues {
+            if let Some(known_issue) = known_issues_map.get(&issue.number) {
+                if known_issue.comments_count == issue.comments_count {
+                    issue.comments = known_issue.comments.clone();
+                    continue;
+                } else {
+                    updated_issues = true;
+                }
+            } else {
+                new_issues = true;
+            }
+            let comments = self.get_issue_comments(issue.number).await?;
+            for comment in comments {
+                issue.comments.push(comment.body.unwrap_or("".to_string()));
+            }
+        }
+
+        Ok((all_issues, new_issues, updated_issues))
     }
 
     pub(crate) async fn get_issue(&self, issue_number: u64) -> anyhow::Result<Issue> {
         self.execute_with_retry(|| async {
             let octocrab = self.octocrab.lock().await;
-            octocrab
+            let issue = octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .get(issue_number)
                 .await
-                .context(format!("Failed to get issue #{}", issue_number))
+                .context(format!("Failed to get issue #{}", issue_number))?;
+            let comments = self.get_issue_comments(issue_number).await?;
+            let comments_and_updates = comments
+                .iter()
+                .map(|c| c.body.clone().unwrap_or_default())
+                .collect::<Vec<String>>();
+            Ok(Issue {
+                number: issue.number,
+                title: issue.title,
+                body: issue.body.unwrap_or_default(),
+                state: match issue.state {
+                    IssueState::Open => "open".to_string(),
+                    IssueState::Closed => "closed".to_string(),
+                    _ => "unknown".to_string(),
+                },
+                updated_at: issue.updated_at,
+                labels: issue.labels.iter().map(|l| l.name.clone()).collect(),
+                comments: comments_and_updates,
+                comments_count: issue.comments as usize,
+            })
         })
         .await
     }
@@ -592,21 +621,23 @@ impl GitHubClient {
         title: String,
         body: String,
         labels: Vec<String>,
-    ) -> Result<Issue> {
+    ) -> Result<u64> {
         let title_clone = title.clone();
         let body_clone = body.clone();
         let labels_clone = labels.clone();
 
         self.execute_with_retry(|| async {
             let octocrab = self.octocrab.lock().await;
-            octocrab
+            let i = octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .create(title_clone.clone())
                 .body(body_clone.clone())
                 .labels(labels_clone.clone())
                 .send()
                 .await
-                .context("Failed to create new issue")
+                .context("Failed to create new issue")?;
+
+            Ok(i.number)
         })
         .await
     }

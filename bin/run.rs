@@ -4,7 +4,7 @@ use pristine::web_server::WebServer;
 
 #[tokio::main]
 async fn main() {
-    dotenvy::dotenv_override().expect("Failed to load environment variables from .env file");
+    let _ = dotenvy::dotenv_override();
     let config =
         Config::from_env().expect("Failed to load configuration from environment variables");
     let agent = Agent::new(&config).await.expect("Failed to create agent");

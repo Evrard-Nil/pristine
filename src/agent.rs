@@ -1,4 +1,3 @@
-use octocrab::models::IssueState;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -31,22 +30,112 @@ pub enum Event {
     },
 }
 
-pub struct Agent {
-    memories: HashMap<String, String>,
-    past_actions: Vec<Actions>,
-    past_events: Vec<Event>,
-    new_event: Vec<Event>,
-    last_action_output: Option<String>,
-    last_thought: Option<String>,
+const MAX_PAST_ACTIONS: usize = 5;
+const MAX_PAST_EVENTS: usize = 5;
+const MAX_LAST_THOUGHTS: usize = 5;
 
+pub struct AgentContext {
+    memories: HashMap<String, String>,
+    past_actions: Vec<(Actions, String)>,
+    known_open_issues: Vec<github::Issue>,
+    known_closed_issues_titles: Vec<String>,
+    past_events: Vec<String>,
+    new_event: Vec<String>,
+    last_thoughts: Vec<String>,
+
+    error: Option<String>,
+}
+
+impl AgentContext {
+    fn build_contextual_prompt(&self) -> String {
+        let mut prompt = String::new();
+        prompt.push_str("You are an AI agent managing a GitHub repository.\n");
+        prompt.push_str("Here is the current context:\n");
+
+        if !self.memories.is_empty() {
+            prompt.push_str("\nMemories:\n");
+            for (key, value) in &self.memories {
+                prompt.push_str(&format!("{}: {}\n", key, value));
+            }
+        }
+
+        let past_actions_to_display = self
+            .past_actions
+            .iter()
+            .rev()
+            .take(MAX_PAST_ACTIONS)
+            .collect::<Vec<_>>();
+        if !past_actions_to_display.is_empty() {
+            prompt.push_str("\nPast Actions (most recent first):\n");
+            for (action, output) in past_actions_to_display.into_iter().rev() {
+                prompt.push_str(&format!("{:?}: {}\n", action, output));
+            }
+        }
+
+        if !self.known_open_issues.is_empty() {
+            prompt.push_str("\nKnown Open Issues:\n");
+            prompt.push_str(
+                &serde_json::to_string(&self.known_open_issues)
+                    .unwrap_or_else(|_| "Failed to serialize known open issues".to_string()),
+            );
+        }
+
+        if !self.known_closed_issues_titles.is_empty() {
+            prompt.push_str("\nKnown Closed Issues:\n");
+            for title in &self.known_closed_issues_titles {
+                prompt.push_str(&format!("{}\n", title));
+            }
+        }
+
+        let past_events_to_display = self
+            .past_events
+            .iter()
+            .rev()
+            .take(MAX_PAST_EVENTS)
+            .collect::<Vec<_>>();
+        if !past_events_to_display.is_empty() {
+            prompt.push_str("\nPast Events (most recent first):\n");
+            for event in past_events_to_display.into_iter().rev() {
+                prompt.push_str(&format!("{}\n", event));
+            }
+        }
+
+        if !self.new_event.is_empty() {
+            prompt.push_str("\nNew Events:\n");
+            for event in &self.new_event {
+                prompt.push_str(&format!("{}\n", event));
+            }
+        }
+
+        let last_thoughts_to_display = self
+            .last_thoughts
+            .iter()
+            .rev()
+            .take(MAX_LAST_THOUGHTS)
+            .collect::<Vec<_>>();
+        if !last_thoughts_to_display.is_empty() {
+            prompt.push_str("\nLast Thoughts (most recent first):\n");
+            for thought in last_thoughts_to_display.into_iter().rev() {
+                prompt.push_str(&format!("{}\n", thought));
+            }
+        }
+
+        if let Some(error) = &self.error {
+            prompt.push_str(&format!("\nError: {}\n", error));
+        }
+
+        prompt
+    }
+}
+
+pub struct Agent {
     github: github::GitHubClient,
     repo: repository::RepositoryManager,
     llm: llm::LlmClient,
     monitor: Arc<Monitor>,
-    current_issues: Vec<octocrab::models::issues::Issue>,
-    current_open_issues_title: Vec<(u64, String)>,
-    known_issues: HashMap<u64, (String, chrono::DateTime<chrono::Utc>)>, // issue_number -> (last_body, last_updated)
-    known_comments: HashMap<u64, Vec<(u64, String)>>, // issue_number -> Vec<(comment_id, comment_body)>
+    known_issues: Vec<github::Issue>,
+
+    agent_context: AgentContext,
 }
 
 impl Agent {
@@ -57,67 +146,54 @@ impl Agent {
         let mut llm = llm::LlmClient::new(config)?;
         let monitor = Arc::new(Monitor::new());
         llm.set_monitor(monitor.clone());
-        let current_issues = github.list_all_issues(None).await?;
-        let current_open_issues_title = current_issues
+        let (known_issues, _, _) = github.list_all_issues(None, &vec![]).await?;
+        let known_closed_issues_titles = known_issues
             .iter()
-            .filter(|issue| issue.state == IssueState::Open)
-            .map(|issue| (issue.number, issue.title.clone()))
-            .collect::<Vec<(u64, String)>>();
-        // Initialize known issues and comments from current state
-        let mut known_issues = HashMap::new();
-        let mut known_comments = HashMap::new();
-
-        for issue in &current_issues {
-            known_issues.insert(
-                issue.number,
-                (issue.body.clone().unwrap_or_default(), issue.updated_at),
-            );
-
-            // Get initial comments for each issue
-            if let Ok(comments) = github.get_issue_comments(issue.number).await {
-                let comment_data: Vec<(u64, String)> = comments
-                    .into_iter()
-                    .map(|c| (c.id.0, c.body.unwrap_or_default()))
-                    .collect();
-                known_comments.insert(issue.number, comment_data);
-            }
-        }
+            .filter(|issue| issue.state == "closed")
+            .map(|issue| issue.title.clone())
+            .collect::<Vec<String>>();
+        let known_open_issues = known_issues
+            .iter()
+            .filter(|issue| issue.state == "open")
+            .cloned()
+            .collect::<Vec<github::Issue>>();
 
         Ok(Self {
-            memories: HashMap::new(),
-            past_actions: Vec::new(),
             github,
             repo,
             llm,
             monitor,
-            last_action_output: None,
-            last_thought: None,
-            new_event: Vec::new(),
-            past_events: Vec::new(),
-            current_issues,
-            current_open_issues_title,
             known_issues,
-            known_comments,
+            agent_context: AgentContext {
+                memories: HashMap::new(),
+                past_actions: Vec::new(),
+                known_open_issues,
+                known_closed_issues_titles,
+                past_events: Vec::new(),
+                new_event: Vec::new(),
+                last_thoughts: Vec::new(),
+                error: None,
+            },
         })
     }
 
     pub fn get_memory(&self, key: &str) -> Option<&String> {
-        self.memories.get(key)
+        self.agent_context.memories.get(key)
     }
 
     pub fn set_memory(&mut self, key: String, value: String) {
-        self.memories.insert(key, value);
+        self.agent_context.memories.insert(key, value);
     }
 
     pub fn remove_memory(&mut self, key: &str) {
-        self.memories.remove(key);
+        self.agent_context.memories.remove(key);
     }
 
     pub fn get_monitor(&self) -> Arc<Monitor> {
         self.monitor.clone()
     }
 
-    pub async fn check_for_events(&mut self) -> Vec<Event> {
+    pub async fn check_for_events(&mut self) -> Vec<String> {
         let mut events = vec![];
 
         // Check for new commits
@@ -131,91 +207,41 @@ impl Agent {
                 return events;
             };
             println!("New commit detected: {}", commit.id());
-            let event = Event::NewCommit {
-                commit_hash: commit.id().to_string(),
-                message: commit.message().unwrap_or("").to_string(),
-            };
+            let event = format!(
+                "New commit detected: {} - {}",
+                commit.id(),
+                commit.message().unwrap_or("No message")
+            );
             events.push(event);
         }
 
         // Get all current issues
-        let current_issues = match self.github.list_all_issues(Some("all".to_string())).await {
-            Ok(issues) => issues,
-            Err(e) => {
-                println!("Failed to list issues: {}", e);
-                return events;
-            }
-        };
-
-        // Check for new issues
-        for issue in &current_issues {
-            if !self.known_issues.contains_key(&issue.number) {
-                println!("New issue detected: #{} - {}", issue.number, issue.title);
-                let event = Event::NewIssue {
-                    issue_number: issue.number,
-                    title: issue.title.clone(),
-                    body: issue.body.clone().unwrap_or_default(),
-                };
-                events.push(event);
-
-                // Add to known issues
-                self.known_issues.insert(
-                    issue.number,
-                    (issue.body.clone().unwrap_or_default(), issue.updated_at),
-                );
-            }
-        }
-
-        // Check for new comments on open issues
-        for issue in &current_issues {
-            if issue.state == IssueState::Open {
-                match self.github.get_issue_comments(issue.number).await {
-                    Ok(comments) => {
-                        let current_comment_data: Vec<(u64, String)> = comments
-                            .iter()
-                            .map(|c| (c.id.0, c.body.clone().unwrap_or_default()))
-                            .collect();
-
-                        // Get known comments for this issue
-                        let known_comments_for_issue = self
-                            .known_comments
-                            .get(&issue.number)
-                            .cloned()
-                            .unwrap_or_default();
-
-                        // Check for new comments
-                        for (comment_id, comment_body) in &current_comment_data {
-                            if !known_comments_for_issue
-                                .iter()
-                                .any(|(id, _)| id == comment_id)
-                            {
-                                println!("New comment detected on issue #{}", issue.number);
-                                let event = Event::NewComment {
-                                    issue_number: issue.number,
-                                    body: comment_body.clone(),
-                                };
-                                events.push(event);
-                            }
-                        }
-
-                        // Update known comments
-                        self.known_comments
-                            .insert(issue.number, current_comment_data);
-                    }
-                    Err(e) => {
-                        println!("Failed to get comments for issue #{}: {}", issue.number, e);
-                    }
+        let (current_issues, new_issues, new_updates) =
+            match self.github.list_all_issues(None, &self.known_issues).await {
+                Ok(issues) => issues,
+                Err(e) => {
+                    println!("Failed to list issues: {}", e);
+                    return events;
                 }
-            }
+            };
+        if new_issues {
+            events.push("New issue detected".to_string());
         }
-
-        // Update current issues list
-        self.current_issues = current_issues;
-        self.current_open_issues_title = self
-            .current_issues
+        if new_updates {
+            events.push("New updates on existing issues detected".to_string());
+        }
+        self.known_issues = current_issues;
+        self.agent_context.known_open_issues = self
+            .known_issues
             .iter()
-            .filter(|issue| issue.state == IssueState::Open)
-            .map(|issue| (issue.number, issue.title.clone()))
+            .filter(|issue| issue.state == "open")
+            .cloned()
+            .collect();
+        self.agent_context.known_closed_issues_titles = self
+            .known_issues
+            .iter()
+            .filter(|issue| issue.state == "closed")
+            .map(|issue| issue.title.clone())
             .collect();
 
         events
@@ -223,13 +249,20 @@ impl Agent {
 
     pub async fn start(mut self) -> ! {
         loop {
-            self.past_events.extend(self.new_event.clone());
-            self.new_event.clear();
+            self.agent_context
+                .past_events
+                .extend(self.agent_context.new_event.drain(..));
+            // Trim past_events to MAX_PAST_EVENTS
+            if self.agent_context.past_events.len() > MAX_PAST_EVENTS {
+                self.agent_context
+                    .past_events
+                    .drain(0..self.agent_context.past_events.len() - MAX_PAST_EVENTS);
+            }
             let new_events = self.check_for_events().await;
             if !new_events.is_empty() {
                 println!("New events detected: {:?}", new_events);
             }
-            self.new_event = new_events;
+            self.agent_context.new_event = new_events;
 
             self.think().await;
             let actions = self.decide().await;
@@ -238,8 +271,15 @@ impl Agent {
             } else {
                 println!("Decided actions: {:?}", actions);
                 for action in actions {
-                    self.past_actions.push(action.clone());
-                    self.act(action).await;
+                    let o = self.act(action.clone()).await;
+                    println!("Action output: {}", o);
+                    self.agent_context.past_actions.push((action, o));
+                    // Trim past_actions to MAX_PAST_ACTIONS
+                    if self.agent_context.past_actions.len() > MAX_PAST_ACTIONS {
+                        self.agent_context
+                            .past_actions
+                            .drain(0..self.agent_context.past_actions.len() - MAX_PAST_ACTIONS);
+                    }
                 }
             }
             // Sleep for a while before the next iteration
@@ -253,7 +293,7 @@ impl Agent {
         // For now, we will just print the current state.
         println!("Thinking about the current state...");
 
-        let mut prompt = self.build_contextual_prompt();
+        let mut prompt = self.agent_context.build_contextual_prompt();
         prompt.push_str("\n\nNow, think about what actions to take next.\n");
 
         let thought = self
@@ -261,37 +301,18 @@ impl Agent {
             .generate_text(&thinking_system_prompt(), &prompt)
             .await
             .unwrap();
-        self.last_thought = Some(thought.clone());
+        self.agent_context.last_thoughts.push(thought.clone());
+        // Trim last_thoughts to MAX_LAST_THOUGHTS
+        if self.agent_context.last_thoughts.len() > MAX_LAST_THOUGHTS {
+            self.agent_context
+                .last_thoughts
+                .drain(0..self.agent_context.last_thoughts.len() - MAX_LAST_THOUGHTS);
+        }
         println!("Thought: {}", thought);
     }
 
-    fn build_contextual_prompt(&self) -> String {
-        let mut prompt = String::new();
-        prompt.push_str("\n\nCurrent context:\n");
-        prompt.push_str(&format!("Memories: {:?}\n", self.memories));
-        prompt.push_str(&format!(
-            "Past actions (old to new): {:?}\n",
-            self.past_actions
-        ));
-        prompt.push_str(&format!(
-            "Past events (old to new): {:?}\n",
-            self.past_events
-        ));
-        prompt.push_str(&format!("New event: {:?}\n", self.new_event));
-        prompt.push_str(&format!(
-            "Last action output: {:?}\n",
-            self.last_action_output
-        ));
-        prompt.push_str(&format!("Last thought: {:?}\n", self.last_thought));
-        prompt.push_str(&format!(
-            "Current open issues: {:?}\n",
-            self.current_open_issues_title
-        ));
-        prompt
-    }
-
     pub async fn decide(&mut self) -> Vec<Actions> {
-        let mut prompt = self.build_contextual_prompt();
+        let mut prompt = self.agent_context.build_contextual_prompt();
         prompt.push_str("\n\nNow, decide on the actions to take next.\n");
 
         let actions_json = self
@@ -303,7 +324,7 @@ impl Agent {
 
         let actions: Vec<Actions> = serde_json::from_str(&actions_json).unwrap_or_else(|_| {
             println!("Failed to parse actions JSON: {}", actions_json);
-            self.last_action_output =
+            self.agent_context.error =
                 Some(format!("Failed to parse actions JSON: {}", actions_json));
             vec![]
         });
@@ -311,82 +332,56 @@ impl Agent {
         actions
     }
 
-    pub async fn act(&mut self, action: Actions) {
+    pub async fn act(&mut self, action: Actions) -> String {
         println!("Acting on action: {:?}", action);
         let start_time = std::time::Instant::now();
         let action_clone = action.clone();
 
-        match action {
-            Actions::ReadAllTheCodeBase => {
-                let code = self.repo.read_all_code().await.unwrap_or_default();
-                self.last_action_output = Some(code);
-            }
-            Actions::ListAllFiles => {
-                let files = self.repo.list_all_files().await.unwrap_or_default();
-                self.last_action_output = Some(files.join(", "));
-            }
+        let output: String = match action {
+            Actions::ReadAllTheCodeBase => self.repo.read_all_code().await.unwrap_or_default(),
+            Actions::ListAllFiles => self
+                .repo
+                .list_all_files()
+                .await
+                .unwrap_or_default()
+                .join(", "),
             Actions::ReadASingleFile { path } => {
-                let content = self.repo.read_file(&path).await.unwrap_or_default();
-                self.last_action_output = Some(content);
+                self.repo.read_file(&path).await.unwrap_or_default()
             }
             Actions::StoreOrUpdateMemoryInContext { key, value } => {
-                self.last_action_output = Some(format!("Stored memory: {} = {}", key, value));
+                let ouput = format!("Stored memory: {} = {}", key, value);
                 self.set_memory(key, value);
+                ouput
             }
             Actions::RemoveMemoryFromContext { key } => {
-                self.last_action_output = Some(format!("Removed memory: {}", key));
                 self.remove_memory(&key);
+                format!("Removed memory: {}", key)
             }
             Actions::GithubCreateIssue {
                 title,
                 body,
                 labels,
             } => {
-                let issue = match self
+                match self
                     .github
                     .create_issue(title.clone(), body.clone(), labels)
                     .await
                 {
                     Ok(i) => {
-                        self.last_action_output =
-                            Some(format!("Created issue: #{} - {}", i.number, i.title));
-                        i
+                        format!("Created issue: {} - {}", i, title)
                     }
                     Err(err) => {
-                        self.last_action_output =
-                            Some(format!("Failed to create issue: {}", err.to_string()));
                         println!("Error creating issue: {}", err);
-                        return;
+                        format!("Failed to create issue: {}", err)
                     }
-                };
-                println!("Created issue #{}", issue.number);
-
-                // Add to known issues
-                self.known_issues
-                    .insert(issue.number, (body, issue.updated_at));
-
-                // Initialize empty comments for new issue
-                self.known_comments.insert(issue.number, Vec::new());
-            }
-            Actions::GithubListIssues { state } => {
-                let issues = self
-                    .github
-                    .list_all_issues(Some(state.clone()))
-                    .await
-                    .unwrap_or_default();
-                self.current_issues = issues.clone();
-                if state == "open" || state == "all" {
-                    self.current_open_issues_title = issues
-                        .iter()
-                        .filter(|issue| issue.state == IssueState::Open)
-                        .map(|issue| (issue.number, issue.title.clone()))
-                        .collect::<Vec<(u64, String)>>();
                 }
-                println!("Listed issues: {:?}", issues);
             }
             Actions::GithubGetIssue { issue_number } => {
                 let issue = self.github.get_issue(issue_number).await.unwrap();
-                println!("Got issue: {:?}", issue);
+                serde_json::to_string(&issue).unwrap_or_else(|_| {
+                    println!("Failed to serialize issue: {}", issue_number);
+                    format!("Failed to serialize issue: {}", issue_number)
+                })
             }
             Actions::GithubAddLabelToIssue {
                 issue_number,
@@ -397,6 +392,7 @@ impl Agent {
                     .await
                     .unwrap();
                 println!("Added label '{}' to issue #{}", label, issue_number);
+                format!("Added label '{}' to issue #{}", label, issue_number)
             }
             Actions::GithubRemoveLabelFromIssue {
                 issue_number,
@@ -407,10 +403,12 @@ impl Agent {
                     .await
                     .unwrap();
                 println!("Removed label '{}' from issue #{}", label, issue_number);
+                format!("Removed label '{}' from issue #{}", label, issue_number)
             }
             Actions::GithubCloseIssue { issue_number } => {
                 self.github.close_issue(issue_number).await.unwrap();
                 println!("Closed issue #{}", issue_number);
+                format!("Closed issue #{}", issue_number)
             }
             Actions::GithubCommentOnIssue { issue_number, body } => {
                 self.github
@@ -418,6 +416,7 @@ impl Agent {
                     .await
                     .unwrap();
                 println!("Commented on issue #{}: {}", issue_number, body);
+                format!("Commented on issue #{}: {}", issue_number, body)
             }
             Actions::GithubEditBodyOfIssue { issue_number, body } => {
                 self.github
@@ -425,6 +424,7 @@ impl Agent {
                     .await
                     .unwrap();
                 println!("Edited body of issue #{}: {}", issue_number, body);
+                format!("Edited body of issue #{}: {}", issue_number, body)
             }
             Actions::GithubEditTitleOfIssue {
                 issue_number,
@@ -435,6 +435,7 @@ impl Agent {
                     .await
                     .unwrap();
                 println!("Edited title of issue #{}: {}", issue_number, title);
+                format!("Edited title of issue #{}: {}", issue_number, title)
             }
             Actions::RunLLMInference {
                 system_prompt,
@@ -446,18 +447,21 @@ impl Agent {
                     .await
                     .unwrap_or_default();
                 println!("LLM response: {}", response);
-                self.last_action_output = Some(response);
+                response
             }
             Actions::Sleep { duration } => {
                 println!("Sleeping for {} seconds...", duration);
                 tokio::time::sleep(std::time::Duration::from_secs(duration)).await;
                 println!("Woke up after {} seconds.", duration);
+                format!("Slept for {} seconds.", duration)
             }
-        }
+        };
 
         // Log the action execution
         let duration_ms = start_time.elapsed().as_millis() as u64;
         self.monitor
-            .log_action(action_clone, self.last_action_output.clone(), duration_ms);
+            .log_action(action_clone, output.clone(), duration_ms);
+        println!("Action executed in {} ms", duration_ms);
+        output
     }
 }
