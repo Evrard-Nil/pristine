@@ -22,24 +22,30 @@ pub struct Issue {
     pub state: String,
     pub updated_at: DateTime<Utc>,
     pub labels: Vec<String>,
-    pub comments: Vec<String>,
-    pub comments_count: usize, // Added to track the number of comments
+    pub comments: Vec<(String, String)>, // (author, comment_body)
+    pub comments_count: usize,           // Added to track the number of comments
 }
 
 impl Display for Issue {
     /// Formats the issue for adding to the context prompt.
     /// We add all the relevant fields to the prompt.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let formatted_comments: Vec<String> = self
+            .comments
+            .iter()
+            .map(|(author, body)| format!("  - {}: {}", author, body))
+            .collect();
+
         write!(
             f,
-            "Issue #{}: {}\nState: {}\nUpdated at: {}\nLabels: {:?}\nBody: {}\nComments and Updates: {:?}",
+            "Issue #{}: {}\nState: {}\nUpdated at: {}\nLabels: {:?}\nBody: {}\nComments and Updates:\n{}",
             self.number,
             self.title,
             self.state,
             self.updated_at.to_rfc3339(),
             self.labels,
             self.body,
-            self.comments
+            formatted_comments.join("\n")
         )
     }
 }
@@ -237,7 +243,9 @@ impl GitHubClient {
                 };
                 let comments = self.get_issue_comments(item.number).await?;
                 for comment in comments {
-                    issue.comments.push(comment.body.unwrap_or("".to_string()));
+                    issue
+                        .comments
+                        .push((comment.user.login.clone(), comment.body.unwrap_or_default()));
                 }
                 issues.push(issue);
             }
@@ -578,7 +586,9 @@ impl GitHubClient {
             }
             let comments = self.get_issue_comments(issue.number).await?;
             for comment in comments {
-                issue.comments.push(comment.body.unwrap_or("".to_string()));
+                issue
+                    .comments
+                    .push((comment.user.login.clone(), comment.body.unwrap_or_default()));
             }
         }
 
@@ -596,8 +606,8 @@ impl GitHubClient {
             let comments = self.get_issue_comments(issue_number).await?;
             let comments_and_updates = comments
                 .iter()
-                .map(|c| c.body.clone().unwrap_or_default())
-                .collect::<Vec<String>>();
+                .map(|c| (c.user.login.clone(), c.body.clone().unwrap_or_default()))
+                .collect::<Vec<(String, String)>>();
             Ok(Issue {
                 number: issue.number,
                 title: issue.title,

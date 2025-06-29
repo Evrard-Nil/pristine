@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::Utc;
+
 use crate::actions::{Actions, action_system_prompt, thinking_system_prompt};
 use crate::config;
 use crate::github;
@@ -42,6 +44,7 @@ pub struct AgentContext {
     past_events: Vec<String>,
     new_event: Vec<String>,
     last_thoughts: Vec<String>,
+    contributors: String,
 
     error: Option<String>,
 }
@@ -49,7 +52,11 @@ pub struct AgentContext {
 impl AgentContext {
     fn build_contextual_prompt(&self) -> String {
         let mut prompt = String::new();
-        prompt.push_str("You are an AI agent managing a GitHub repository.\n");
+        let current_time = Utc::now();
+        prompt.push_str(&format!(
+            "You are an AI agent managing a GitHub repository. Current time: {}\n",
+            current_time.to_rfc3339()
+        ));
         prompt.push_str("Here is the current context:\n");
 
         if !self.memories.is_empty() {
@@ -74,10 +81,20 @@ impl AgentContext {
 
         if !self.known_open_issues.is_empty() {
             prompt.push_str("\nKnown Open Issues:\n");
-            prompt.push_str(
-                &serde_json::to_string(&self.known_open_issues)
-                    .unwrap_or_else(|_| "Failed to serialize known open issues".to_string()),
-            );
+            for issue in &self.known_open_issues {
+                let duration = current_time.signed_duration_since(issue.updated_at);
+                let time_ago = format_duration(duration);
+                prompt.push_str(&format!(
+                    "Issue #{}: {} (Updated {} ago)\nState: {}\nLabels: {:?}\nBody: {}\nComments and Updates: {:?}\n",
+                    issue.number,
+                    issue.title,
+                    time_ago,
+                    issue.state,
+                    issue.labels,
+                    issue.body,
+                    issue.comments
+                ));
+            }
         }
 
         if !self.known_closed_issues_titles.is_empty() {
@@ -120,11 +137,30 @@ impl AgentContext {
             }
         }
 
+        if !self.contributors.is_empty() {
+            prompt.push_str(&format!(
+                "\nRepository Contributors: {}\n",
+                self.contributors
+            ));
+        }
+
         if let Some(error) = &self.error {
             prompt.push_str(&format!("\nError: {}\n", error));
         }
 
         prompt
+    }
+}
+
+fn format_duration(duration: chrono::Duration) -> String {
+    if duration.num_days() > 0 {
+        format!("{} days", duration.num_days())
+    } else if duration.num_hours() > 0 {
+        format!("{} hours", duration.num_hours())
+    } else if duration.num_minutes() > 0 {
+        format!("{} minutes", duration.num_minutes())
+    } else {
+        format!("{} seconds", duration.num_seconds())
     }
 }
 
@@ -158,6 +194,10 @@ impl Agent {
             .cloned()
             .collect::<Vec<github::Issue>>();
 
+        // For now, we'll use an empty string for contributors
+        // In the future, this could be populated from repository data or GitHub API
+        let contributors_string = String::new();
+
         Ok(Self {
             github,
             repo,
@@ -172,6 +212,7 @@ impl Agent {
                 past_events: Vec::new(),
                 new_event: Vec::new(),
                 last_thoughts: Vec::new(),
+                contributors: contributors_string,
                 error: None,
             },
         })

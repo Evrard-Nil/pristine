@@ -182,10 +182,40 @@ impl WebServer {
             padding: 10px;
             border-radius: 4px;
             font-size: 14px;
-            max-height: 150px;
-            overflow-y: auto;
             white-space: pre-wrap;
             word-wrap: break-word;
+            position: relative;
+        }
+        
+        .prompt-content.collapsed {
+            max-height: 100px;
+            overflow: hidden;
+        }
+        
+        .prompt-content.collapsed::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 30px;
+            background: linear-gradient(to bottom, transparent, #f8f9fa);
+        }
+        
+        .expand-toggle {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 8px;
+            transition: background 0.2s;
+        }
+        
+        .expand-toggle:hover {
+            background: #2980b9;
         }
         
         .model-info {
@@ -252,7 +282,8 @@ impl WebServer {
     
     <script>
         let currentTab = 'actions';
-        
+        const expandedStates = new Set(); // Store IDs of expanded elements
+
         function showTab(tab) {
             currentTab = tab;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -261,6 +292,9 @@ impl WebServer {
             event.target.classList.add('active');
             document.getElementById(tab).classList.add('active');
             
+            // Clear expanded states when switching tabs
+            expandedStates.clear();
+
             if (tab === 'actions') {
                 loadActions();
             } else {
@@ -279,14 +313,26 @@ impl WebServer {
                     return;
                 }
                 
-                container.innerHTML = data.map(action => `
-                    <div class="log-entry">
-                        <div class="timestamp">${new Date(action.timestamp).toLocaleString()}</div>
-                        <div class="action-name">${getActionName(action.action)}</div>
-                        ${action.result ? `<div class="result">${escapeHtml(action.result)}</div>` : ''}
-                        <div class="duration">Duration: ${action.duration_ms}ms</div>
-                    </div>
-                `).join('');
+                container.innerHTML = data.map((action, index) => {
+                    const resultId = `action-result-${index}`;
+                    const isExpanded = expandedStates.has(resultId) ? '' : 'collapsed';
+                    const buttonText = expandedStates.has(resultId) ? 'Show Less' : 'Show More';
+
+                    return `
+                        <div class="log-entry">
+                            <div class="timestamp">${new Date(action.timestamp).toLocaleString()}</div>
+                            <div class="action-name">${getActionName(action.action)}</div>
+                            ${action.result ? `
+                                <div class="prompt-section">
+                                    <div class="prompt-label">Result:</div>
+                                    <div id="${resultId}" class="prompt-content ${isExpanded}">${escapeHtml(action.result)}</div>
+                                    ${action.result.length > 200 ? `<button class="expand-toggle" onclick="toggleExpand('${resultId}', this)">${buttonText}</button>` : ''}
+                                </div>
+                            ` : ''}
+                            <div class="duration">Duration: ${action.duration_ms}ms</div>
+                        </div>
+                    `;
+                }).join('');
             } catch (error) {
                 document.getElementById('actions').innerHTML = 
                     '<div class="error">Error loading actions: ' + error.message + '</div>';
@@ -304,25 +350,42 @@ impl WebServer {
                     return;
                 }
                 
-                container.innerHTML = data.map(call => `
-                    <div class="log-entry">
-                        <div class="timestamp">${new Date(call.timestamp).toLocaleString()}</div>
-                        <div class="model-info">Model: ${call.model}</div>
-                        <div class="prompt-section">
-                            <div class="prompt-label">System Prompt:</div>
-                            <div class="prompt-content">${escapeHtml(call.system_prompt)}</div>
+                container.innerHTML = data.map((call, index) => {
+                    const systemPromptId = `system-${index}`;
+                    const userPromptId = `user-${index}`;
+                    const responseId = `response-${index}`;
+
+                    const isSystemExpanded = expandedStates.has(systemPromptId) ? '' : 'collapsed';
+                    const isUserExpanded = expandedStates.has(userPromptId) ? '' : 'collapsed';
+                    const isResponseExpanded = expandedStates.has(responseId) ? '' : 'collapsed';
+
+                    const systemButtonText = expandedStates.has(systemPromptId) ? 'Show Less' : 'Show More';
+                    const userButtonText = expandedStates.has(userPromptId) ? 'Show Less' : 'Show More';
+                    const responseButtonText = expandedStates.has(responseId) ? 'Show Less' : 'Show More';
+                    
+                    return `
+                        <div class="log-entry">
+                            <div class="timestamp">${new Date(call.timestamp).toLocaleString()}</div>
+                            <div class="model-info">Model: ${call.model}</div>
+                            <div class="prompt-section">
+                                <div class="prompt-label">System Prompt:</div>
+                                <div id="${systemPromptId}" class="prompt-content ${isSystemExpanded}">${escapeHtml(call.system_prompt)}</div>
+                                ${call.system_prompt.length > 200 ? `<button class="expand-toggle" onclick="toggleExpand('${systemPromptId}', this)">${systemButtonText}</button>` : ''}
+                            </div>
+                            <div class="prompt-section">
+                                <div class="prompt-label">User Prompt:</div>
+                                <div id="${userPromptId}" class="prompt-content ${isUserExpanded}">${escapeHtml(call.user_prompt)}</div>
+                                ${call.user_prompt.length > 200 ? `<button class="expand-toggle" onclick="toggleExpand('${userPromptId}', this)">${userButtonText}</button>` : ''}
+                            </div>
+                            <div class="prompt-section">
+                                <div class="prompt-label">Response:</div>
+                                <div id="${responseId}" class="prompt-content ${isResponseExpanded}">${escapeHtml(call.response)}</div>
+                                ${call.response.length > 200 ? `<button class="expand-toggle" onclick="toggleExpand('${responseId}', this)">${responseButtonText}</button>` : ''}
+                            </div>
+                            <div class="duration">Duration: ${call.duration_ms}ms</div>
                         </div>
-                        <div class="prompt-section">
-                            <div class="prompt-label">User Prompt:</div>
-                            <div class="prompt-content">${escapeHtml(call.user_prompt)}</div>
-                        </div>
-                        <div class="prompt-section">
-                            <div class="prompt-label">Response:</div>
-                            <div class="prompt-content">${escapeHtml(call.response)}</div>
-                        </div>
-                        <div class="duration">Duration: ${call.duration_ms}ms</div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
             } catch (error) {
                 document.getElementById('llm').innerHTML = 
                     '<div class="error">Error loading LLM calls: ' + error.message + '</div>';
@@ -340,6 +403,19 @@ impl WebServer {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+        
+        function toggleExpand(elementId, button) {
+            const element = document.getElementById(elementId);
+            if (element.classList.contains('collapsed')) {
+                element.classList.remove('collapsed');
+                button.textContent = 'Show Less';
+                expandedStates.add(elementId);
+            } else {
+                element.classList.add('collapsed');
+                button.textContent = 'Show More';
+                expandedStates.delete(elementId);
+            }
         }
         
         function refreshData() {
