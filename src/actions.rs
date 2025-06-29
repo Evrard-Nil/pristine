@@ -46,11 +46,13 @@ A few rules to follow:
 - Always provide a clear title and description for the issues you create.
 - Do not create issues that are duplicates of existing ones. 
 - Only create issues for most relevant problems.
-- Not creating issues is an option, if you think no action is needed.
+- Not creating issues should be the default, issues should only be created when there is a clear need for them.
 - Use history of issues to understand user preferences and avoid creating duplicate issues.
 - The code and documentation may be wrong sometimes, do not always take it at face value.
 - You are not a coding agent, you are an issue management agent. Your goal is to manage issues, not to write code.
-- Do not attempt to fix issues, let humans or other AI agents handle that. Close the issue if it is fixed.
+- Do not attempt to fix issues let humans or other AI agents handle that. Close the issue if it is fixed.
+- Do not spam comments on issues, only comment when necessary.
+- Keep the minimum amount of issues open at any time.
 
 Actions you can take:
 "#;
@@ -67,7 +69,7 @@ You should only output the JSON array, nothing else.
 Example of output:
 ```json
 [
-    "ReadAllTheCodeBase",
+    "ListAllFiles",
     {
         "GithubCreateIssue": {
             "title": "Test Issue", 
@@ -94,7 +96,6 @@ Use up to 10 actions in a single output.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, EnumIter)]
 pub enum Actions {
     // Repo I/O
-    ReadAllTheCodeBase,
     RunLLMInference {
         system_prompt: String,
         user_prompt: String,
@@ -154,7 +155,6 @@ pub enum Actions {
 impl Actions {
     pub fn name(&self) -> &str {
         match self {
-            Actions::ReadAllTheCodeBase => "read_all_the_code_base",
             Actions::RunLLMInference { .. } => "run_llm_inference",
             Actions::ListAllFiles => "list_all_files",
             Actions::ReadASingleFile { .. } => "read_a_single_file",
@@ -174,9 +174,6 @@ impl Actions {
 
     pub fn desc(&self) -> &str {
         match self {
-            Actions::ReadAllTheCodeBase => {
-                "Read all the code in the repository and returns all code content."
-            }
             Actions::RunLLMInference { .. } => {
                 "Run LLM inference with the provided system and user prompts.\
                 Returns the generated text from the LLM."
@@ -271,7 +268,6 @@ mod tests {
     #[test]
     fn test_actions_ser() {
         let actions = vec![
-            Actions::ReadAllTheCodeBase,
             Actions::GithubCreateIssue {
                 title: "Test Issue".to_string(),
                 body: "This is a test issue".to_string(),

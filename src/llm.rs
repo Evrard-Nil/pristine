@@ -73,6 +73,10 @@ impl LlmClient {
 
     pub async fn generate_text(&self, system_prompt: &str, user_prompt: &str) -> Result<String> {
         let start_time = std::time::Instant::now();
+        println!(
+            "===== SYSTEM PROMPT =====\n{}\n===== USER PROMPT =====\n{}",
+            system_prompt, user_prompt
+        );
 
         let messages = vec![
             ChatCompletionMessage {

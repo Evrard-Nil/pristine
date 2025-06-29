@@ -53,10 +53,7 @@ impl AgentContext {
     fn build_contextual_prompt(&self) -> String {
         let mut prompt = String::new();
         let current_time = Utc::now();
-        prompt.push_str(&format!(
-            "You are an AI agent managing a GitHub repository. Current time: {}\n",
-            current_time.to_rfc3339()
-        ));
+        prompt.push_str(&format!("Current time: {}\n", current_time.to_rfc3339()));
         prompt.push_str("Here is the current context:\n");
 
         if !self.memories.is_empty() {
@@ -147,6 +144,7 @@ impl AgentContext {
         if let Some(error) = &self.error {
             prompt.push_str(&format!("\nError: {}\n", error));
         }
+        prompt.push_str("\n");
 
         prompt
     }
@@ -310,7 +308,10 @@ impl Agent {
             if actions.is_empty() {
                 println!("No actions decided. Waiting for new events...");
             } else {
-                println!("Decided actions: {:?}", actions);
+                println!("Decided actions:");
+                for action in &actions {
+                    println!("{:?}", action);
+                }
                 for action in actions {
                     let o = self.act(action.clone()).await;
                     println!("Action output: {}", o);
@@ -379,7 +380,6 @@ impl Agent {
         let action_clone = action.clone();
 
         let output: String = match action {
-            Actions::ReadAllTheCodeBase => self.repo.read_all_code().await.unwrap_or_default(),
             Actions::ListAllFiles => self
                 .repo
                 .list_all_files()
@@ -387,7 +387,14 @@ impl Agent {
                 .unwrap_or_default()
                 .join(", "),
             Actions::ReadASingleFile { path } => {
-                self.repo.read_file(&path).await.unwrap_or_default()
+                let file_content = self.repo.read_file(&path).await.unwrap_or_default();
+                // clip the content to a reasonable length for display
+                let clipped_content = if file_content.len() > 5000 {
+                    format!("{}...", &file_content[..5000])
+                } else {
+                    file_content
+                };
+                clipped_content
             }
             Actions::StoreOrUpdateMemoryInContext { key, value } => {
                 let ouput = format!("Stored memory: {} = {}", key, value);
