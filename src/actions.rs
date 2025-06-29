@@ -49,6 +49,8 @@ A few rules to follow:
 - Not creating issues is an option, if you think no action is needed.
 - Use history of issues to understand user preferences and avoid creating duplicate issues.
 - The code and documentation may be wrong sometimes, do not always take it at face value.
+- You are not a coding agent, you are an issue management agent. Your goal is to manage issues, not to write code.
+- Do not attempt to fix issues, let humans or other AI agents handle that. Close the issue if it is fixed.
 
 Actions you can take:
 "#;
@@ -117,9 +119,6 @@ pub enum Actions {
         body: String,
         labels: Vec<String>,
     },
-    GithubListIssues {
-        state: String,
-    },
     GithubGetIssue {
         issue_number: u64,
     },
@@ -162,7 +161,6 @@ impl Actions {
             Actions::StoreOrUpdateMemoryInContext { .. } => "store_or_update_memory_in_context",
             Actions::RemoveMemoryFromContext { .. } => "remove_memory_from_context",
             Actions::GithubCreateIssue { .. } => "github_create_issue",
-            Actions::GithubListIssues { .. } => "github_list_issues",
             Actions::GithubGetIssue { .. } => "github_get_issue",
             Actions::GithubAddLabelToIssue { .. } => "github_add_label_to_issue",
             Actions::GithubRemoveLabelFromIssue { .. } => "github_remove_label_from_issue",
@@ -208,11 +206,6 @@ impl Actions {
                 "Create a new issue in the GitHub repository.\
                 The issue is identified by a title and a body, both of which are strings.\
                 You can also specify labels for the issue."
-            }
-            Actions::GithubListIssues { .. } => {
-                "List all issues in the GitHub repository.\
-                You can specify the state of the issues to list (e.g., 'open', 'closed').\
-                Returns a list of issues."
             }
             Actions::GithubGetIssue { .. } => {
                 "Get a specific issue from the GitHub repository.\
