@@ -49,7 +49,7 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
-    fn build_contextual_prompt(&self) -> String {
+    fn build_contextual_prompt(&mut self) -> String {
         let mut prompt = String::new();
         let current_time = Utc::now();
         prompt.push_str(&format!("Current time: {}\n", current_time.to_rfc3339()));
@@ -116,6 +116,7 @@ impl AgentContext {
         if let Some(error) = &self.error {
             prompt.push_str(&format!("\nError: {}\n", error));
         }
+        self.error = None; // Clear error after displaying
         prompt.push_str("\n");
 
         prompt
