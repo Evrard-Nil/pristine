@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y \
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-COPY bin ./bin
 COPY .gh_pk ./.gh_pk
 
 # Build the release binary
