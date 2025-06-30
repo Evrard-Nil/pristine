@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y \
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-COPY bin ./bin
 COPY .gh_pk ./.gh_pk
 
 # Build the release binary
@@ -33,7 +32,7 @@ RUN apt-get update && apt-get install -y \
 COPY --from=builder /app/target/release/run ./pristine_agent
 
 # Expose the port the web server runs on
-EXPOSE 5000
+EXPOSE 5005
 
 # Command to run the application
 CMD ["./pristine_agent"]

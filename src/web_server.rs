@@ -430,7 +430,7 @@ impl WebServer {
         loadActions();
         
         // Auto-refresh every 5 seconds
-        setInterval(refreshData, 5000);
+        setInterval(refreshData, 25000);
     </script>
 </body>
 </html>"#;
