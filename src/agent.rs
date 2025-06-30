@@ -32,19 +32,18 @@ pub enum Event {
     },
 }
 
-const MAX_PAST_ACTIONS: usize = 5;
 const MAX_PAST_EVENTS: usize = 5;
-const MAX_LAST_THOUGHTS: usize = 5;
 
 pub struct AgentContext {
     memories: HashMap<String, String>,
-    past_actions: Vec<(Actions, String)>,
+
+    last_action_output: Option<String>,
+    last_thought: Option<String>,
+
     known_open_issues: Vec<github::Issue>,
     known_closed_issues_titles: Vec<String>,
     past_events: Vec<String>,
     new_event: Vec<String>,
-    last_thoughts: Vec<String>,
-    contributors: String,
 
     error: Option<String>,
 }
@@ -54,25 +53,11 @@ impl AgentContext {
         let mut prompt = String::new();
         let current_time = Utc::now();
         prompt.push_str(&format!("Current time: {}\n", current_time.to_rfc3339()));
-        prompt.push_str("Here is the current context:\n");
 
         if !self.memories.is_empty() {
             prompt.push_str("\nMemories:\n");
             for (key, value) in &self.memories {
                 prompt.push_str(&format!("{}: {}\n", key, value));
-            }
-        }
-
-        let past_actions_to_display = self
-            .past_actions
-            .iter()
-            .rev()
-            .take(MAX_PAST_ACTIONS)
-            .collect::<Vec<_>>();
-        if !past_actions_to_display.is_empty() {
-            prompt.push_str("\nPast Actions (most recent first):\n");
-            for (action, output) in past_actions_to_display.into_iter().rev() {
-                prompt.push_str(&format!("{:?}: {}\n", action, output));
             }
         }
 
@@ -121,24 +106,11 @@ impl AgentContext {
             }
         }
 
-        let last_thoughts_to_display = self
-            .last_thoughts
-            .iter()
-            .rev()
-            .take(MAX_LAST_THOUGHTS)
-            .collect::<Vec<_>>();
-        if !last_thoughts_to_display.is_empty() {
-            prompt.push_str("\nLast Thoughts (most recent first):\n");
-            for thought in last_thoughts_to_display.into_iter().rev() {
-                prompt.push_str(&format!("{}\n", thought));
-            }
+        if let Some(last_action_output) = &self.last_action_output {
+            prompt.push_str(&format!("Last Action Output: {}\n", last_action_output));
         }
-
-        if !self.contributors.is_empty() {
-            prompt.push_str(&format!(
-                "\nRepository Contributors: {}\n",
-                self.contributors
-            ));
+        if let Some(last_thought) = &self.last_thought {
+            prompt.push_str(&format!("Last Thought: {}\n", last_thought));
         }
 
         if let Some(error) = &self.error {
@@ -192,10 +164,6 @@ impl Agent {
             .cloned()
             .collect::<Vec<github::Issue>>();
 
-        // For now, we'll use an empty string for contributors
-        // In the future, this could be populated from repository data or GitHub API
-        let contributors_string = String::new();
-
         Ok(Self {
             github,
             repo,
@@ -204,13 +172,13 @@ impl Agent {
             known_issues,
             agent_context: AgentContext {
                 memories: HashMap::new(),
-                past_actions: Vec::new(),
                 known_open_issues,
                 known_closed_issues_titles,
                 past_events: Vec::new(),
                 new_event: Vec::new(),
-                last_thoughts: Vec::new(),
-                contributors: contributors_string,
+
+                last_action_output: None,
+                last_thought: None,
                 error: None,
             },
         })
@@ -287,6 +255,8 @@ impl Agent {
     }
 
     pub async fn start(mut self) -> ! {
+        println!("Starting agent...");
+        println!("System prompt: \n{}", thinking_system_prompt());
         loop {
             self.agent_context
                 .past_events
@@ -312,17 +282,14 @@ impl Agent {
                 for action in &actions {
                     println!("{:?}", action);
                 }
+                let mut outputs = String::new();
                 for action in actions {
                     let o = self.act(action.clone()).await;
                     println!("Action output: {}", o);
-                    self.agent_context.past_actions.push((action, o));
-                    // Trim past_actions to MAX_PAST_ACTIONS
-                    if self.agent_context.past_actions.len() > MAX_PAST_ACTIONS {
-                        self.agent_context
-                            .past_actions
-                            .drain(0..self.agent_context.past_actions.len() - MAX_PAST_ACTIONS);
-                    }
+                    outputs.push_str(format!("Action: {:?}\nOutput: {}\n", action, o).as_str());
                 }
+                // Update the last action and output in the agent context
+                self.agent_context.last_action_output = Some(outputs.clone());
             }
             // Sleep for a while before the next iteration
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -343,14 +310,8 @@ impl Agent {
             .generate_text(&thinking_system_prompt(), &prompt)
             .await
             .unwrap();
-        self.agent_context.last_thoughts.push(thought.clone());
-        // Trim last_thoughts to MAX_LAST_THOUGHTS
-        if self.agent_context.last_thoughts.len() > MAX_LAST_THOUGHTS {
-            self.agent_context
-                .last_thoughts
-                .drain(0..self.agent_context.last_thoughts.len() - MAX_LAST_THOUGHTS);
-        }
         println!("Thought: {}", thought);
+        self.agent_context.last_thought = Some(thought);
     }
 
     pub async fn decide(&mut self) -> Vec<Actions> {

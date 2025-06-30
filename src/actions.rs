@@ -146,7 +146,6 @@ pub enum Actions {
         issue_number: u64,
         title: String,
     },
-
     Sleep {
         duration: u64, // Duration in seconds
     },
@@ -235,7 +234,8 @@ impl Actions {
             }
             Actions::Sleep { .. } => {
                 "Sleep for a specified duration in seconds.\
-                This action is used to pause the agent's execution for a while."
+                This action is used to pause the agent's execution for a while.
+                This should be the default when no other actions are needed."
             }
         }
     }
