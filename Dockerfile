@@ -1,4 +1,3 @@
-# Stage 1: Builder
 FROM rust:1.88-slim-bookworm AS builder
 
 WORKDIR /app
@@ -13,11 +12,10 @@ RUN apt-get update && apt-get install -y \
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-COPY bin ./bin
 COPY .gh_pk ./.gh_pk
 
 # Build the release binary
-RUN cargo build --release
+RUN cargo build --release --locked --offline || cargo build --release --locked
 
 # Stage 2: Runner
 FROM debian:bookworm-slim
