@@ -1,0 +1,25 @@
+http:
+  port: 5005 # Port on which the agent's HTTP server listens for the monitoring dashboard.
+  health_check_path: / # Path for health checks, serving the main dashboard.
+stdin: false # The agent does not require input from stdin.
+name: Pristine
+summary: Pristine is an AI agent designed to manage issues on a GitHub repository. Its primary goal is to maintain the state of issues by creating, updating, and closing them as needed. This includes detecting new documentation issues, scoping human-created issues, responding to comments, mapping TODOs in code to issues, closing resolved issues, identifying logic flaws and testing improvements, suggesting features, and prioritizing issues. The agent also ensures no duplicate issues are created and manages issue labels effectively.
+environment_variables:
+  - name: OPENAI_API_KEY
+    value: <your_openai_api_key>
+    description: The OpenAI API key to use for the agent's LLM interactions. This is a required environment variable.
+  - name: OPENAI_API_BASE
+    value: <your_openai_api_base>
+    description: The base URL for the OpenAI API. Defaults to 'https://api.openai.com' if not provided.
+  - name: OPENAI_API_MODEL
+    value: <your_openai_api_model>
+    description: The specific OpenAI model to use for LLM calls. Defaults to 'gpt-3.5-turbo' if not provided.
+  - name: GITHUB_REPOSITORY_OWNER
+    value: <your_github_repository_owner>
+    description: The owner (user or organization) of the GitHub repository the agent will interact with. This is a required environment variable.
+  - name: GITHUB_REPOSITORY_NAME
+    value: <your_github_repository_name>
+    description: The name of the GitHub repository the agent will interact with. This is a required environment variable.
+  - name: GITHUB_REPOSITORY_ISSUES_BRANCH
+    value: <your_github_repository_issues_branch>
+    description: The branch used for managing issues in the GitHub repository. Defaults to 'issues' if not provided.
