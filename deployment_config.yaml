@@ -1,0 +1,28 @@
+http:
+  port: 5005 # Port on which the agent's HTTP server listens
+  health_check_path: / # Path for health checks, serving the dashboard
+stdin: false # The agent operates autonomously and does not require stdin input.
+name: Pristine
+summary: Pristine is an AI agent that manages issues on a GitHub repository. Its responsibilities include detecting new documentation issues, scoping human-created issues, answering human comments on issues, mapping TODOs in code to issues, closing resolved issues, scanning the codebase for logic flaws, suggesting features or enhancements, ensuring no duplicate issues are created, prioritizing issues, and managing labels. The agent creates small, actionable, and focused issues.
+environment_variables:
+  - name: OPENAI_API_KEY
+    value: <your_openai_api_key>
+    description: The OpenAI API key for authenticating with the OpenAI API for Large Language Model (LLM) inference. This is a required environment variable.
+  - name: OPENAI_API_BASE
+    value: https://api.openai.com
+    description: The base URL for the OpenAI API. This allows the application to connect to custom or self-hosted OpenAI-compatible endpoints. Defaults to `https://api.openai.com`.
+  - name: OPENAI_API_MODEL
+    value: gpt-3.5-turbo
+    description: The specific OpenAI model to be used for LLM inference (e.g., `gpt-3.5-turbo`). Defaults to `gpt-3.5-turbo`.
+  - name: GITHUB_REPOSITORY_OWNER
+    value: <github_repo_owner>
+    description: The GitHub username or organization name that owns the repository the agent will interact with. This is a required environment variable.
+  - name: GITHUB_REPOSITORY_NAME
+    value: <github_repo_name>
+    description: The name of the GitHub repository that the agent is configured to manage. This is a required environment variable.
+  - name: GITHUB_REPOSITORY_ISSUES_BRANCH
+    value: issues
+    description: The name of the Git branch within the repository that is used for managing issues. This might be a dedicated branch for the agent's operations. Defaults to `issues`.
+  - name: OPENAI_KEY
+    value: <your_openai_key>
+    description: An alternative environment variable for the OpenAI API key. The `openai` crate's `Credentials::from_env()` method checks for this variable if `OPENAI_API_KEY` is not explicitly set.
