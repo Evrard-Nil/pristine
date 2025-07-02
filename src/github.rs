@@ -144,18 +144,8 @@ impl GitHubClient {
         Ok(all_comments)
     }
 
-    pub async fn list_all_issues(
-        &self,
-        state: Option<String>,
-        known_issues: &[Issue],
-    ) -> Result<(Vec<Issue>, bool, bool)> {
-        let known_issues_map: std::collections::HashMap<u64, &Issue> = known_issues
-            .into_iter()
-            .map(|issue| (issue.number, issue))
-            .collect();
+    pub async fn list_all_issues(&self, state: Option<String>) -> Result<Vec<Issue>> {
         let mut all_issues = Vec::new();
-        let mut new_issues = false;
-        let mut updated_issues = false;
 
         match state.as_deref() {
             Some("open") => {
@@ -328,16 +318,6 @@ impl GitHubClient {
 
         println!("Parsed {} issues from the response.", all_issues.len());
         for issue in &mut all_issues {
-            if let Some(known_issue) = known_issues_map.get(&issue.number) {
-                if known_issue.comments_count == issue.comments_count {
-                    issue.comments = known_issue.comments.clone();
-                    continue;
-                } else {
-                    updated_issues = true;
-                }
-            } else {
-                new_issues = true;
-            }
             let comments = self.get_issue_comments(issue.number).await?;
             for comment in comments {
                 issue
@@ -346,7 +326,7 @@ impl GitHubClient {
             }
         }
 
-        Ok((all_issues, new_issues, updated_issues))
+        Ok(all_issues)
     }
 
     pub(crate) async fn get_issue(&self, issue_number: u64) -> anyhow::Result<Issue> {

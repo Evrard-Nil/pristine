@@ -153,7 +153,7 @@ impl Agent {
         let mut llm = llm::LlmClient::new(config)?;
         let monitor = Arc::new(Monitor::new());
         llm.set_monitor(monitor.clone());
-        let (known_issues, _, _) = github.list_all_issues(None, &vec![]).await?;
+        let known_issues = github.list_all_issues(None).await?;
         let known_closed_issues_titles = known_issues
             .iter()
             .filter(|issue| issue.state == "closed")
@@ -224,21 +224,37 @@ impl Agent {
         }
 
         // Get all current issues
-        let (current_issues, new_issues, new_updates) =
-            match self.github.list_all_issues(None, &self.known_issues).await {
-                Ok(issues) => issues,
-                Err(e) => {
-                    println!("Failed to list issues: {}", e);
-                    return events;
+        let current_issues = match self.github.list_all_issues(None).await {
+            Ok(issues) => issues,
+            Err(e) => {
+                println!("Failed to list issues: {}", e);
+                return events;
+            }
+        };
+
+        let known_issues_map: HashMap<u64, github::Issue> = self
+            .known_issues
+            .drain(..)
+            .map(|issue| (issue.number, issue))
+            .collect();
+
+        let mut new_known_issues = Vec::new();
+        for issue in current_issues {
+            if let Some(known_issue) = known_issues_map.get(&issue.number) {
+                // Issue exists, check for updates
+                if known_issue.updated_at != issue.updated_at
+                    || known_issue.comments_count != issue.comments_count
+                {
+                    events.push(format!("Issue #{} updated: {}", issue.number, issue.title));
                 }
-            };
-        if new_issues {
-            events.push("New issue detected".to_string());
+            } else {
+                // New issue
+                events.push(format!("New issue: #{} - {}", issue.number, issue.title));
+            }
+            new_known_issues.push(issue);
         }
-        if new_updates {
-            events.push("New updates on existing issues detected".to_string());
-        }
-        self.known_issues = current_issues;
+        self.known_issues = new_known_issues;
+
         self.agent_context.known_open_issues = self
             .known_issues
             .iter()
