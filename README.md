@@ -56,6 +56,18 @@ The Pristine agent follows a clear separation of concerns, with distinct modules
 
 The application leverages Rust's strong type system and concurrency features (via `tokio`) to build a robust and performant autonomous agent. Error handling is managed using `anyhow` for consistent error propagation.
 
+## Configuration
+
+Pristine relies on environment variables for its configuration. These variables must be set in your environment before running the application.
+
+-   `GITHUB_PERSONAL_ACCESS_TOKEN`: Your GitHub Personal Access Token (PAT) with `repo` scope. This is required for cloning private repositories and interacting with the GitHub API.
+-   `GITHUB_REPOSITORY_OWNER`: The owner (user or organization) of the target GitHub repository.
+-   `GITHUB_REPOSITORY_NAME`: The name of the target GitHub repository.
+-   `GITHUB_REPOSITORY_ISSUES_BRANCH`: (Optional) The name of the branch where issues will be managed. Defaults to `issues`.
+-   `OPENAI_API_KEY`: Your OpenAI API key for LLM integration.
+-   `OPENAI_API_BASE`: (Optional) The base URL for the OpenAI API. Defaults to `https://api.openai.com`.
+-   `OPENAI_API_MODEL`: (Optional) The name of the OpenAI model to use. Defaults to `gpt-3.5-turbo`.
+
 ## Next steps
 - **MCP filesysem server**
-- 
+-
