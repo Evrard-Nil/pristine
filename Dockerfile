@@ -12,8 +12,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
+
+# Compile an empty crate to cache dependencies
+RUN mkdir -p src/bin && echo "fn main() {}" > src/main.rs  && echo "fn main() {}" > src/bin/run.rs
+RUN cargo build --release
+RUN rm -rf src/main.rs
+
 COPY src ./src
-COPY .gh_pk ./.gh_pk
 
 # Build the release binary
 RUN cargo build --release

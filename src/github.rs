@@ -3,16 +3,13 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc}; // Use chrono directly
 use git2::Repository;
 use octocrab::Octocrab;
-use octocrab::models::{AppId, InstallationToken, IssueState, issues::Comment};
+use octocrab::models::{IssueState, issues::Comment};
 use octocrab::params::Direction;
-use octocrab::params::apps::CreateInstallationAccessToken;
 use octocrab::params::issues::Sort::{self, Updated}; // For sorting issues
-use serde_json;
 use std::fmt::Display;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
-use url::Url;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Issue {
@@ -50,130 +47,28 @@ impl Display for Issue {
     }
 }
 
-pub struct GitHubClient {
+pub(crate) struct GitHubClient {
     pub octocrab: Arc<Mutex<Octocrab>>,
     repo_owner: String,
     repo_name: String,
     access_token: Arc<Mutex<String>>,
-    app_id: AppId,
-    app_private_key: String,
-    installation_id: u64,
 }
 
 impl GitHubClient {
-    pub async fn new(config: &Config) -> Result<Self> {
-        let app_id = config
-            .gh_app_id
-            .parse::<u64>()
-            .map(AppId)
-            .map_err(|e| anyhow::anyhow!("Invalid GH_APP_ID: {}", e))?;
-
-        let key = jsonwebtoken::EncodingKey::from_rsa_pem(config.gh_app_private_key.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Failed to parse GH_APP_PRIVATE_KEY: {}", e))?;
-
-        let initial_octocrab = Octocrab::builder()
-            .app(app_id, key)
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to create initial Octocrab client: {}", e))?;
-
-        println!(
-            "Initial Octocrab client created successfully for App ID: {}",
-            app_id.0
-        );
-
-        let installation = initial_octocrab
-            .apps()
-            .get_repository_installation(
-                &config.github_repository_owner,
-                &config.github_repository_name,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to get repository installation: {}", e))?;
-
-        println!(
-            "Repository installation retrieved successfully. Installation ID: {}",
-            installation.id
-        );
-
-        let mut create_access_token = CreateInstallationAccessToken::default();
-        create_access_token.repositories = vec![config.github_repository_name.clone()];
-
-        let access_token_url_str = installation
-            .access_tokens_url
-            .ok_or_else(|| anyhow::anyhow!("Access tokens URL not found in installation"))?;
-        let access_token_url = Url::parse(&access_token_url_str)
-            .map_err(|e| anyhow::anyhow!("Failed to parse access_tokens_url: {}", e))?;
-
-        let access: InstallationToken = initial_octocrab
-            .post(access_token_url.path(), Some(&create_access_token))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to create installation access token: {}", e))?;
-
-        println!("Installation access token obtained successfully.");
-
+    pub(crate) async fn new(config: &Config) -> Result<Self> {
         let octocrab_with_token = Octocrab::builder()
-            .personal_token(access.token.clone())
+            .personal_token(config.github_personal_access_token.clone())
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to create Octocrab client with token: {}", e))?;
 
-        println!("Octocrab client with installation token created successfully.");
+        println!("Octocrab client with personal access token created successfully.");
 
         Ok(Self {
             octocrab: Arc::new(Mutex::new(octocrab_with_token)),
             repo_owner: config.github_repository_owner.clone(),
             repo_name: config.github_repository_name.clone(),
-            access_token: Arc::new(Mutex::new(access.token)),
-            app_id,
-            app_private_key: config.gh_app_private_key.clone(),
-            installation_id: installation.id.0,
+            access_token: Arc::new(Mutex::new(config.github_personal_access_token.clone())),
         })
-    }
-
-    async fn refresh_access_token(&self) -> Result<()> {
-        println!("Refreshing GitHub access token...");
-
-        let key = jsonwebtoken::EncodingKey::from_rsa_pem(self.app_private_key.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Failed to parse private key during refresh: {}", e))?;
-
-        let app_octocrab = Octocrab::builder()
-            .app(self.app_id, key)
-            .build()
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to create app Octocrab client during refresh: {}", e)
-            })?;
-
-        let mut create_access_token = CreateInstallationAccessToken::default();
-        create_access_token.repositories = vec![self.repo_name.clone()];
-
-        let access_token_url = format!("/app/installations/{}/access_tokens", self.installation_id);
-
-        let access: InstallationToken = app_octocrab
-            .post(&access_token_url, Some(&create_access_token))
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to create new installation access token: {}", e)
-            })?;
-
-        println!("New installation access token obtained successfully.");
-
-        // Update the stored access token
-        let mut token_guard = self.access_token.lock().await;
-        *token_guard = access.token.clone();
-
-        // Create new octocrab client with the new token
-        let new_octocrab = Octocrab::builder()
-            .personal_token(access.token)
-            .build()
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to create Octocrab client with new token: {}", e)
-            })?;
-
-        // Update the octocrab client
-        let mut octocrab_guard = self.octocrab.lock().await;
-        *octocrab_guard = new_octocrab;
-
-        println!("GitHub client refreshed with new access token.");
-        Ok(())
     }
 
     async fn execute_with_retry<F, T, Fut>(&self, operation: F) -> Result<T>
@@ -181,81 +76,11 @@ impl GitHubClient {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
-        // First attempt
-        match operation().await {
-            Ok(result) => Ok(result),
-            Err(e) => {
-                // Check if the error is due to authentication failure
-                let error_str = e.to_string().to_lowercase();
-                if error_str.contains("401")
-                    || error_str.contains("unauthorized")
-                    || error_str.contains("bad credentials")
-                    || error_str.contains("authentication")
-                {
-                    println!("Authentication error detected: {}", e);
-
-                    // Refresh the token
-                    self.refresh_access_token().await?;
-
-                    // Retry the operation
-                    println!("Retrying operation after token refresh...");
-                    operation().await
-                } else {
-                    // Not an authentication error, return the original error
-                    Err(e)
-                }
-            }
-        }
+        // Only attempt the operation once, as PATs don't need refreshing
+        operation().await
     }
 
-    pub async fn list_open_issues(&self) -> Result<Vec<Issue>> {
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            let issues_page = octocrab
-                .issues(&self.repo_owner, &self.repo_name)
-                .list()
-                .per_page(100)
-                .sort(octocrab::params::issues::Sort::Updated)
-                .state(octocrab::params::State::Open)
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to list repository issues: {}", e))?;
-
-            println!(
-                "Repository issues retrieved successfully. Count: {}",
-                issues_page.items.len()
-            );
-            let mut issues = vec![];
-            for item in issues_page.items {
-                let mut issue = Issue {
-                    number: item.number,
-                    title: item.title,
-                    body: item.body.unwrap_or_default(),
-                    state: match item.state {
-                        IssueState::Open => "open".to_string(),
-                        IssueState::Closed => "closed".to_string(),
-                        _ => "unknown".to_string(),
-                    },
-                    updated_at: item.updated_at,
-                    labels: item.labels.iter().map(|l| l.name.clone()).collect(),
-                    comments: vec![],
-                    comments_count: item.comments as usize,
-                };
-                let comments = self.get_issue_comments(item.number).await?;
-                for comment in comments {
-                    issue
-                        .comments
-                        .push((comment.user.login.clone(), comment.body.unwrap_or_default()));
-                }
-                issues.push(issue);
-            }
-            println!("Parsed {} issues from the response.", issues.len());
-            Ok(issues)
-        })
-        .await
-    }
-
-    pub async fn clone_repository(&self) -> Result<(TempDir, Repository)> {
+    pub(crate) async fn clone_repository(&self) -> Result<(TempDir, Repository)> {
         let token = self.access_token.lock().await.clone();
         let clone_url = format!(
             "https://x-access-token:{}@github.com/{}/{}.git",
@@ -279,21 +104,6 @@ impl GitHubClient {
             repo_dir.path().display()
         );
         Ok((repo_dir, repo))
-    }
-
-    pub async fn delete_issue(&self, issue_number: u64) -> Result<()> {
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
-                .issues(&self.repo_owner, &self.repo_name)
-                .update(issue_number)
-                .state(IssueState::Closed)
-                .send()
-                .await
-                .context(format!("Failed to close issue #{}", issue_number))?;
-            Ok(())
-        })
-        .await
     }
 
     pub async fn get_issue_comments(&self, issue_number: u64) -> Result<Vec<Comment>> {
@@ -332,62 +142,6 @@ impl GitHubClient {
         }
 
         Ok(all_comments)
-    }
-
-    pub async fn add_comment_to_issue(&self, issue_number: u64, body: &str) -> Result<()> {
-        let body_clone = body.to_string();
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
-                .issues(&self.repo_owner, &self.repo_name)
-                .create_comment(issue_number, &body_clone)
-                .await
-                .context(format!("Failed to add comment to issue #{}", issue_number))?;
-            println!("Added comment to issue #{}", issue_number);
-            Ok(())
-        })
-        .await
-    }
-
-    pub async fn update_issue(
-        &self,
-        issue_number: u64,
-        title: Option<String>,
-        body: Option<String>,
-        labels: Option<Vec<String>>,
-    ) -> Result<()> {
-        // Build the update request with the provided fields
-        let mut update_request = serde_json::json!({});
-
-        if let Some(title) = title {
-            update_request["title"] = serde_json::json!(title);
-        }
-
-        if let Some(body) = body {
-            update_request["body"] = serde_json::json!(body);
-        }
-
-        if let Some(labels) = labels {
-            update_request["labels"] = serde_json::json!(labels);
-        }
-
-        // Use the PATCH endpoint directly
-        let route = format!(
-            "/repos/{}/{}/issues/{}",
-            self.repo_owner, self.repo_name, issue_number
-        );
-
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
-                ._patch(route.clone(), Some(&update_request))
-                .await
-                .context(format!("Failed to update issue #{}", issue_number))?;
-
-            println!("Updated issue #{}", issue_number);
-            Ok(())
-        })
-        .await
     }
 
     pub async fn list_all_issues(

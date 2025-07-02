@@ -1,10 +1,7 @@
 #[derive(Clone)] // Add Clone trait
 #[allow(dead_code)]
 pub struct Config {
-    pub gh_app_id: String,
-    pub gh_app_client_id: String,
-    pub gh_app_client_secret: String,
-    pub gh_app_private_key: String,
+    pub github_personal_access_token: String,
 
     pub openai_api_key: String,
     pub openai_api_base: String,
@@ -19,10 +16,9 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         Ok(Self {
-            gh_app_id: "1429200".to_string(),
-            gh_app_client_id: "Iv23livtKwE8vUQDqAPB".to_string(),
-            gh_app_client_secret: "7dc2d035f4b25ec58049dfde4ab59334a8463f1e".to_string(),
-            gh_app_private_key: include_str!("../.gh_pk").trim().to_string(),
+            github_personal_access_token: std::env::var("GITHUB_PERSONAL_ACCESS_TOKEN").map_err(
+                |e| anyhow::anyhow!("Failed to read GITHUB_PERSONAL_ACCESS_TOKEN: {}", e),
+            )?,
 
             openai_api_key: std::env::var("OPENAI_API_KEY")
                 .map_err(|e| anyhow::anyhow!("Failed to read OPENAI_API_KEY: {}", e))?,
