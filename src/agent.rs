@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 
-use crate::actions::{Actions, action_system_prompt, thinking_system_prompt};
+use crate::actions::{Actions, thinking_system_prompt};
 use crate::config;
 use crate::github;
 use crate::llm;
@@ -67,14 +67,8 @@ impl AgentContext {
                 let duration = current_time.signed_duration_since(issue.updated_at);
                 let time_ago = format_duration(duration);
                 prompt.push_str(&format!(
-                    "Issue #{}: {} (Updated {} ago)\nState: {}\nLabels: {:?}\nBody: {}\nComments and Updates: {:?}\n",
-                    issue.number,
-                    issue.title,
-                    time_ago,
-                    issue.state,
-                    issue.labels,
-                    issue.body,
-                    issue.comments
+                    "Issue #{}: {} (Updated {} ago)\nState: {}\nLabels: {:?}\n",
+                    issue.number, issue.title, time_ago, issue.state, issue.labels,
                 ));
             }
         }
@@ -118,6 +112,12 @@ impl AgentContext {
         }
         self.error = None; // Clear error after displaying
         prompt.push_str("\n");
+
+        let current_size = prompt.len();
+        prompt.push_str(&format!(
+            "Current size of the context: {} characters\n",
+            current_size
+        ));
 
         prompt
     }
@@ -274,8 +274,7 @@ impl Agent {
             }
             self.agent_context.new_event = new_events;
 
-            self.think().await;
-            let actions = self.decide().await;
+            let actions = self.think().await;
             if actions.is_empty() {
                 println!("No actions decided. Waiting for new events...");
             } else {
@@ -297,7 +296,7 @@ impl Agent {
         }
     }
 
-    pub async fn think(&mut self) {
+    pub async fn think(&mut self) -> Vec<Actions> {
         // This function should implement the thinking logic of the agent.
         // It should analyze the current state, past actions, and events to decide what to do next.
         // For now, we will just print the current state.
@@ -312,26 +311,33 @@ impl Agent {
             .await
             .unwrap();
         println!("Thought: {}", thought);
-        self.agent_context.last_thought = Some(thought);
-    }
 
-    pub async fn decide(&mut self) -> Vec<Actions> {
-        let mut prompt = self.agent_context.build_contextual_prompt();
-        prompt.push_str("\n\nNow, decide on the actions to take next.\n");
-
-        let actions_json = self
-            .llm
-            .generate_text(&action_system_prompt(), &prompt)
-            .await
-            .unwrap();
-        println!("Actions JSON: {}", actions_json);
-
-        let actions: Vec<Actions> = serde_json::from_str(&actions_json).unwrap_or_else(|_| {
-            println!("Failed to parse actions JSON: {}", actions_json);
+        // split on json
+        let actions_sart = thought.find("===");
+        if actions_sart.is_none() {
+            println!("No actions found in the thought.");
             self.agent_context.error =
-                Some(format!("Failed to parse actions JSON: {}", actions_json));
-            vec![]
-        });
+                Some("No actions found in your output. Did you use equal signs: === ?".to_string());
+            return vec![];
+        }
+        let actions = &thought[actions_sart.unwrap()..];
+        if actions.is_empty() {
+            println!("No actions found in the thought.");
+            self.agent_context.error = Some("No actions found in the thought.".to_string());
+            return vec![];
+        }
+        let actions = &actions.replace("===", "");
+        let actions = actions.trim();
+        let actions: Vec<Actions> = match serde_json::from_str(actions) {
+            Ok(a) => a,
+            Err(e) => {
+                println!("Failed to parse actions: {}", e);
+                self.agent_context.error = Some(format!("Failed to parse actions: {}", e));
+                return vec![];
+            }
+        };
+
+        self.agent_context.last_thought = Some(thought);
 
         actions
     }
@@ -349,7 +355,13 @@ impl Agent {
                 .unwrap_or_default()
                 .join(", "),
             Actions::ReadASingleFile { path } => {
-                let file_content = self.repo.read_file(&path).await.unwrap_or_default();
+                let file_content = match self.repo.read_file(&path).await {
+                    Ok(content) => content,
+                    Err(e) => {
+                        println!("Failed to read file {}: {}", path, e);
+                        return format!("Failed to read file {}: {}", path, e);
+                    }
+                };
                 // clip the content to a reasonable length for display
                 let clipped_content = if file_content.len() > 5000 {
                     format!("{}...", &file_content[..5000])

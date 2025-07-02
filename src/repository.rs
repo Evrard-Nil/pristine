@@ -154,42 +154,6 @@ impl RepositoryManager {
         Ok(commit)
     }
 
-    pub(crate) async fn read_all_code(&self) -> anyhow::Result<String> {
-        let mut full_context = String::new();
-        let common_code_extensions: Vec<&str> = vec![
-            "rs", "js", "ts", "py", "go", "java", "c", "cpp", "h", "hpp", "cs", "swift", "kt",
-            "php", "rb", "pl", "sh", "md", "yml", "yaml", "toml", "json", "html", "css", "scss",
-        ];
-
-        for entry in WalkDir::new(&self.directory.path())
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-        {
-            let path = entry.path();
-            if path.starts_with(self.directory.path().join(".git")) {
-                continue;
-            }
-            if let Some(ext) = path.extension() {
-                if common_code_extensions.contains(&ext.to_str().unwrap_or("")) {
-                    match fs::read_to_string(path) {
-                        Ok(content) => {
-                            full_context.push_str(&format!(
-                                "\n\n// File: {}\n\n{}",
-                                path.display(),
-                                content
-                            ));
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to read file {}: {}", path.display(), e);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(full_context)
-    }
-
     pub(crate) async fn list_all_files(&self) -> anyhow::Result<Vec<String>> {
         let mut files = Vec::new();
         for entry in WalkDir::new(&self.directory.path())

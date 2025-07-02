@@ -7,17 +7,22 @@ Your goal is to help maintain the state of issues in the repository by creating,
 Start by reading the codebase, documentation and previous issues to understand the project. Store important information in your context.
 
 Your responsibilities include:
-- Detecting new documentation issues.
-- Scope human created issues.
+- Detecting new documentation issues, this could be:
+    - Missing documentation for functions, classes, or modules.
+    - Outdated documentation that does not match the current code.
+    - Incomplete documentation that lacks examples or explanations.
+- Detecting bugs or logic flaws in the code and creating issues for them.
+- Detecting missing unit tests for functions or modules and creating issues for them. Make sure to:
+    - Identify functions or modules that lack tests.
+    - Suggest specific test cases that should be added.
+    - Ask a human if the expected behavior of the function is unclear.
+
+You should also:
 - Answer human comments on issues.
 - Detect TODOs in code and map them to issues.
 - Close issues when they are resolved.
-- Scan the codebase to detect logic flaws and create issues for them.
-- Detect areas where testing could be improved and create issues for them.
-- Suggest features or enhancements based on the codebase.
-- Ensure no duplicate issues are created. If duplicates happen, close the duplicate issue and comment on it with a link to the original issue.
 - Prioritize issues based on their importance and urgency.
-- Managing labels on issues to categorize them effectively.
+- Manage labels on issues to categorize them effectively.
 
 The issues you create should be small, actionable, and focused on a single task.
 
@@ -37,7 +42,7 @@ Here are the tags you can use for issues:
 You will be provided with the current context, which includes:
 - The memories you have stored.
 - Past actions you have taken.
-- The output of the last action you took.
+- The output of the last actions you took.
 - The current size of the context.
 - The list of actions you can take.
 - The list of open issues in the repository.
@@ -47,6 +52,7 @@ A few rules to follow:
 - Always provide a clear title and description for the issues you create.
 - Do not create issues that are duplicates of existing ones. 
 - Only create issues for most relevant problems.
+- Use memories a lot, this is essential for you to maintain context and continuity in your actions. It is your only way to remember what you did on longer term.
 - Not creating issues should be the default, issues should only be created when there is a clear need for them.
 - Use history of issues to understand user preferences and avoid creating duplicate issues.
 - The code and documentation may be wrong sometimes, do not always take it at face value.
@@ -60,42 +66,41 @@ Actions you can take:
 
 const THINKING_ADD_ON: &str = r#"
 Your role is to think carefully about the current state and what actions should be taken next. 
-Weigh different options and consider the consequences of each action. Try to think of the goal you're trying to achieve and how the actions you take will help you get there.
-Do not list actions yet, just think about a plan of action.
-"#;
+Weigh different options and consider the consequences of each action. 
+Try to think of the goal you're trying to achieve and how the actions you take will help you get there.
 
-const ACTION_ADD_ON: &str = r#"
-Your role is to decide on the list of actions to take. Your output should be a JSON array of actions.
-Each action should be a JSON representing of the `Actions` enum.
-You should only output the JSON array, nothing else.
-Example of output:
-```json
+First output your thoughts, then output the actions in JSON format. You must at least have one sentence of thoughts before the actions.
+You answer should end with a JSON array of actions to take.
+Batch actions together when possible, e.g. storing multiple memories at once, or getting multiple issues at once.
+Use up to 10 actions in a single output.
+The thoughts should be a natural language explanation of what you are thinking, and the actions should be a JSON array of actions to take.
+The actions MUST start with three equal signs and end with three equal signs: === , and be a valid JSON array.
+Example output:
+
+```text
+Thoughts:
+I must start by listing all files in the repository to understand its structure.
+I will also store my name in the context for future reference.
+
+Actions:
+===
 [
     "ListAllFiles",
     {
-        "GithubCreateIssue": {
-            "title": "Test Issue", 
-            "body": "This is a test issue",
-            "labels": [
-                "bug",
-                "test"
-            ]
-        }
-    },
-    {
         "StoreOrUpdateMemoryInContext": {
-            "key": "test_key",
-            "value": "test_value"
+            "key": "My name",
+            "value": "Pristine"
         }
     }
 ]
-```
+===
 
-Batch actions together when possible, e.g. storing multiple memories at once, or getting multiple issues at once.
-Use up to 10 actions in a single output.
+```
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, EnumIter)]
+// Snake case is used for enum variants to match the JSON format.
+#[serde(rename_all = "snake_case")]
 pub enum Actions {
     // Repo I/O
     RunLLMInference {
@@ -259,10 +264,6 @@ pub fn thinking_system_prompt() -> String {
     format!("{}{}", general_system_prompt(), THINKING_ADD_ON)
 }
 
-pub fn action_system_prompt() -> String {
-    format!("{}{}", general_system_prompt(), ACTION_ADD_ON)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,13 +298,5 @@ mod tests {
         assert!(!prompt.is_empty());
         assert!(prompt.contains(THINKING_ADD_ON));
         println!("Thinking System Prompt: {}", prompt);
-    }
-
-    #[test]
-    fn test_action_system_prompt() {
-        let prompt = action_system_prompt();
-        assert!(!prompt.is_empty());
-        assert!(prompt.contains(ACTION_ADD_ON));
-        println!("Action System Prompt: {}", prompt);
     }
 }
