@@ -46,6 +46,7 @@ pub struct AgentContext {
     new_event: Vec<String>,
 
     error: Option<String>,
+    is_complete: bool,
 }
 
 impl AgentContext {
@@ -70,13 +71,6 @@ impl AgentContext {
                     "Issue #{}: {} (Updated {} ago)\nState: {}\nLabels: {:?}\n",
                     issue.number, issue.title, time_ago, issue.state, issue.labels,
                 ));
-            }
-        }
-
-        if !self.known_closed_issues_titles.is_empty() {
-            prompt.push_str("\nKnown Closed Issues:\n");
-            for title in &self.known_closed_issues_titles {
-                prompt.push_str(&format!("{}\n", title));
             }
         }
 
@@ -181,6 +175,7 @@ impl Agent {
                 last_action_output: None,
                 last_thought: None,
                 error: None,
+                is_complete: false,
             },
         })
     }
@@ -287,25 +282,32 @@ impl Agent {
             let new_events = self.check_for_events().await;
             if !new_events.is_empty() {
                 println!("New events detected: {:?}", new_events);
+                self.agent_context.is_complete = false; // Reset completion status on new events
             }
             self.agent_context.new_event = new_events;
 
-            let actions = self.think().await;
-            if actions.is_empty() {
-                println!("No actions decided. Waiting for new events...");
+            if !self.agent_context.is_complete {
+                let actions = self.think().await;
+                if actions.is_empty() {
+                    println!("No actions decided. Waiting for new events...");
+                } else {
+                    println!("Decided actions:");
+                    for action in &actions {
+                        println!("{:?}", action);
+                    }
+                    let mut outputs = String::new();
+                    for action in actions {
+                        let o = self.act(action.clone()).await;
+                        println!("Action output: {}", o);
+                        outputs.push_str(format!("Action: {:?}\nOutput: {}\n", action, o).as_str());
+                    }
+                    // Update the last action and output in the agent context
+                    self.agent_context.last_action_output = Some(outputs.clone());
+                }
             } else {
-                println!("Decided actions:");
-                for action in &actions {
-                    println!("{:?}", action);
-                }
-                let mut outputs = String::new();
-                for action in actions {
-                    let o = self.act(action.clone()).await;
-                    println!("Action output: {}", o);
-                    outputs.push_str(format!("Action: {:?}\nOutput: {}\n", action, o).as_str());
-                }
-                // Update the last action and output in the agent context
-                self.agent_context.last_action_output = Some(outputs.clone());
+                println!(
+                    "Agent is marked complete. Skipping inference and waiting for external event."
+                );
             }
             // Sleep for a while before the next iteration
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -364,12 +366,13 @@ impl Agent {
         let action_clone = action.clone();
 
         let output: String = match action {
-            Actions::ListAllFiles => self
-                .repo
-                .list_all_files()
-                .await
-                .unwrap_or_default()
-                .join(", "),
+            Actions::ListAllFiles => match self.repo.list_all_files().await {
+                Ok(files) => files.join(", "),
+                Err(e) => {
+                    println!("Failed to list all files: {}", e);
+                    format!("Failed to list all files: {}", e)
+                }
+            },
             Actions::ReadASingleFile { path } => {
                 let file_content = match self.repo.read_file(&path).await {
                     Ok(content) => content,
@@ -386,10 +389,32 @@ impl Agent {
                 };
                 clipped_content
             }
+            Actions::RunCommand { command } => {
+                match tokio::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .current_dir(self.repo.path())
+                    .output()
+                    .await
+                {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if output.status.success() {
+                            format!("Command executed successfully.\nStdout: {}\nStderr: {}", stdout, stderr)
+                        } else {
+                            format!("Command failed with exit code {:?}.\nStdout: {}\nStderr: {}", output.status.code(), stdout, stderr)
+                        }
+                    }
+                    Err(e) => {
+                        format!("Failed to execute command '{}': {}", command, e)
+                    }
+                }
+            }
             Actions::StoreOrUpdateMemoryInContext { key, value } => {
-                let ouput = format!("Stored memory: {} = {}", key, value);
+                let output = format!("Stored memory: {} = {}", key, value);
                 self.set_memory(key, value);
-                ouput
+                output
             }
             Actions::RemoveMemoryFromContext { key } => {
                 self.remove_memory(&key);
@@ -415,83 +440,125 @@ impl Agent {
                 }
             }
             Actions::GithubGetIssue { issue_number } => {
-                let issue = self.github.get_issue(issue_number).await.unwrap();
-                serde_json::to_string(&issue).unwrap_or_else(|_| {
-                    println!("Failed to serialize issue: {}", issue_number);
-                    format!("Failed to serialize issue: {}", issue_number)
-                })
+                match self.github.get_issue(issue_number).await {
+                    Ok(issue) => serde_json::to_string(&issue).unwrap_or_else(|_| {
+                        println!("Failed to serialize issue: {}", issue_number);
+                        format!("Failed to serialize issue: {}", issue_number)
+                    }),
+                    Err(e) => {
+                        println!("Failed to get issue {}: {}", issue_number, e);
+                        format!("Failed to get issue {}: {}", issue_number, e)
+                    }
+                }
             }
             Actions::GithubAddLabelToIssue {
                 issue_number,
                 label,
             } => {
-                self.github
+                if let Err(e) = self
+                    .github
                     .add_label_to_issue(issue_number, &label)
                     .await
-                    .unwrap();
-                println!("Added label '{}' to issue #{}", label, issue_number);
-                format!("Added label '{}' to issue #{}", label, issue_number)
+                {
+                    println!(
+                        "Failed to add label '{}' to issue #{}: {}",
+                        label, issue_number, e
+                    );
+                    format!(
+                        "Failed to add label '{}' to issue #{}: {}",
+                        label, issue_number, e
+                    )
+                } else {
+                    println!("Added label '{}' to issue #{}", label, issue_number);
+                    format!("Added label '{}' to issue #{}", label, issue_number)
+                }
             }
             Actions::GithubRemoveLabelFromIssue {
                 issue_number,
                 label,
             } => {
-                self.github
+                if let Err(e) = self
+                    .github
                     .remove_label_from_issue(issue_number, &label)
                     .await
-                    .unwrap();
-                println!("Removed label '{}' from issue #{}", label, issue_number);
-                format!("Removed label '{}' from issue #{}", label, issue_number)
+                {
+                    println!(
+                        "Failed to remove label '{}' from issue #{}: {}",
+                        label, issue_number, e
+                    );
+                    format!(
+                        "Failed to remove label '{}' from issue #{}: {}",
+                        label, issue_number, e
+                    )
+                } else {
+                    println!("Removed label '{}' from issue #{}", label, issue_number);
+                    format!("Removed label '{}' from issue #{}", label, issue_number)
+                }
             }
             Actions::GithubCloseIssue { issue_number } => {
-                self.github.close_issue(issue_number).await.unwrap();
-                println!("Closed issue #{}", issue_number);
-                format!("Closed issue #{}", issue_number)
+                if let Err(e) = self.github.close_issue(issue_number).await {
+                    println!("Failed to close issue #{}: {}", issue_number, e);
+                    format!("Failed to close issue #{}: {}", issue_number, e)
+                } else {
+                    println!("Closed issue #{}", issue_number);
+                    format!("Closed issue #{}", issue_number)
+                }
             }
             Actions::GithubCommentOnIssue { issue_number, body } => {
-                self.github
-                    .comment_on_issue(issue_number, &body)
-                    .await
-                    .unwrap();
-                println!("Commented on issue #{}: {}", issue_number, body);
-                format!("Commented on issue #{}: {}", issue_number, body)
+                if let Err(e) = self.github.comment_on_issue(issue_number, &body).await {
+                    println!("Failed to comment on issue #{}: {}", issue_number, e);
+                    format!("Failed to comment on issue #{}: {}", issue_number, e)
+                } else {
+                    println!("Commented on issue #{}: {}", issue_number, body);
+                    format!("Commented on issue #{}: {}", issue_number, body)
+                }
             }
             Actions::GithubEditBodyOfIssue { issue_number, body } => {
-                self.github
-                    .edit_issue_body(issue_number, &body)
-                    .await
-                    .unwrap();
-                println!("Edited body of issue #{}: {}", issue_number, body);
-                format!("Edited body of issue #{}: {}", issue_number, body)
+                if let Err(e) = self.github.edit_issue_body(issue_number, &body).await {
+                    println!("Failed to edit body of issue #{}: {}", issue_number, e);
+                    format!("Failed to edit body of issue #{}: {}", issue_number, e)
+                } else {
+                    println!("Edited body of issue #{}: {}", issue_number, body);
+                    format!("Edited body of issue #{}: {}", issue_number, body)
+                }
             }
             Actions::GithubEditTitleOfIssue {
                 issue_number,
                 title,
             } => {
-                self.github
-                    .edit_issue_title(issue_number, &title)
-                    .await
-                    .unwrap();
-                println!("Edited title of issue #{}: {}", issue_number, title);
-                format!("Edited title of issue #{}: {}", issue_number, title)
+                if let Err(e) = self.github.edit_issue_title(issue_number, &title).await {
+                    println!("Failed to edit title of issue #{}: {}", issue_number, e);
+                    format!("Failed to edit title of issue #{}: {}", issue_number, e)
+                } else {
+                    println!("Edited title of issue #{}: {}", issue_number, title);
+                    format!("Edited title of issue #{}: {}", issue_number, title)
+                }
             }
             Actions::RunLLMInference {
                 system_prompt,
                 user_prompt,
             } => {
-                let response = self
-                    .llm
-                    .generate_text(&system_prompt, &user_prompt)
-                    .await
-                    .unwrap_or_default();
-                println!("LLM response: {}", response);
-                response
+                match self.llm.generate_text(&system_prompt, &user_prompt).await {
+                    Ok(response) => {
+                        println!("LLM response: {}", response);
+                        response
+                    }
+                    Err(e) => {
+                        println!("Failed to run LLM inference: {}", e);
+                        format!("Failed to run LLM inference: {}", e)
+                    }
+                }
             }
             Actions::Sleep { duration } => {
                 println!("Sleeping for {} seconds...", duration);
                 tokio::time::sleep(std::time::Duration::from_secs(duration)).await;
                 println!("Woke up after {} seconds.", duration);
                 format!("Slept for {} seconds.", duration)
+            }
+            Actions::MarkComplete => {
+                println!("Marking task as complete. Agent will now wait for external event.");
+                self.agent_context.is_complete = true;
+                "Task marked complete. Agent is now waiting for external event.".to_string()
             }
         };
 

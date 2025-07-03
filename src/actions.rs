@@ -111,6 +111,9 @@ pub enum Actions {
     ReadASingleFile {
         path: String,
     },
+    RunCommand {
+        command: String,
+    },
 
     // Context Management
     StoreOrUpdateMemoryInContext {
@@ -156,6 +159,7 @@ pub enum Actions {
     Sleep {
         duration: u64, // Duration in seconds
     },
+    MarkComplete,
 }
 
 impl Actions {
@@ -164,8 +168,11 @@ impl Actions {
             Actions::RunLLMInference { .. } => "run_llm_inference",
             Actions::ListAllFiles => "list_all_files",
             Actions::ReadASingleFile { .. } => "read_a_single_file",
+            Actions::RunCommand { .. } => "run_command",
+            
             Actions::StoreOrUpdateMemoryInContext { .. } => "store_or_update_memory_in_context",
             Actions::RemoveMemoryFromContext { .. } => "remove_memory_from_context",
+            
             Actions::GithubCreateIssue { .. } => "github_create_issue",
             Actions::GithubGetIssue { .. } => "github_get_issue",
             Actions::GithubAddLabelToIssue { .. } => "github_add_label_to_issue",
@@ -174,7 +181,9 @@ impl Actions {
             Actions::GithubCommentOnIssue { .. } => "github_comment_on_issue",
             Actions::GithubEditBodyOfIssue { .. } => "github_edit_body_of_issue",
             Actions::GithubEditTitleOfIssue { .. } => "github_edit_title_of_issue",
+
             Actions::Sleep { .. } => "sleep",
+            Actions::MarkComplete => "mark_complete",
         }
     }
 
@@ -191,6 +200,10 @@ impl Actions {
                 "Read a single file in the repository and returns the content of the file.\
                 The file is identified by its path, which is a string.\
                 Use this to read the content of a specific file in the repository."
+            }
+            Actions::RunCommand { .. } => {
+                "Run a command in the shell and returns the output of the command.\
+                The command is a string. Use this to run any command in the shell."
             }
             Actions::StoreOrUpdateMemoryInContext { .. } => {
                 "Store or update a memory in the context.\
@@ -243,6 +256,10 @@ impl Actions {
                 "Sleep for a specified duration in seconds.\
                 This action is used to pause the agent's execution for a while.
                 This should be the default when no other actions are needed."
+            }
+            Actions::MarkComplete => {
+                "Mark the current task as complete and prevent new inference until an external event happens.\
+                Prefer using this action by itself as other actions might trigger new events and bypass the completion."
             }
         }
     }

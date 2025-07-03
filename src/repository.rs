@@ -51,6 +51,10 @@ impl RepositoryManager {
         })
     }
 
+    pub fn path(&self) -> &std::path::Path {
+        self.directory.path()
+    }
+
     pub fn pull(&self) -> anyhow::Result<()> {
         let mut remote = self.repository.find_remote("origin")?;
 
