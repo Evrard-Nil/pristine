@@ -1,0 +1,30 @@
+http:
+  port: 5005
+  health_check_path: /
+name: Pristine GitHub Issue Manager
+summary: An AI agent that manages issues on a GitHub repository by detecting documentation issues, bugs, missing tests, answering comments, and prioritizing tasks.
+environment_variables:
+  - name: GITHUB_PERSONAL_ACCESS_TOKEN
+    value: <your_github_personal_access_token>
+    description: The GitHub Personal Access Token required for authenticating with the GitHub API. This token grants the application permissions to interact with the specified repository (e.g., create, get, update, close issues, add/remove labels, comment).
+  - name: OPENAI_API_KEY
+    value: <your_openai_api_key>
+    description: The OpenAI API key required for authenticating with the OpenAI API and making requests to the LLM.
+  - name: OPENAI_API_BASE
+    value: https://api.openai.com
+    description: The base URL for the OpenAI API. Defaults to 'https://api.openai.com'. Useful for self-hosted LLMs or proxying.
+  - name: OPENAI_API_MODEL
+    value: gpt-3.5-turbo
+    description: The default model to use for OpenAI API calls. Defaults to 'gpt-3.5-turbo'.
+  - name: GITHUB_REPOSITORY_OWNER
+    value: <github_repository_owner>
+    description: The owner (user or organization) of the GitHub repository that the agent will manage.
+  - name: GITHUB_REPOSITORY_NAME
+    value: <github_repository_name>
+    description: The name of the GitHub repository that the agent will manage.
+  - name: GITHUB_REPOSITORY_ISSUES_BRANCH
+    value: issues
+    description: The name of the branch where issues-related changes might be made or tracked. Defaults to 'issues'.
+  - name: OPENAI_KEY
+    value: <your_openai_key_alternative>
+    description: An alternative or fallback environment variable for the OpenAI API key, checked by the 'openai' crate's Credentials::from_env() method.
