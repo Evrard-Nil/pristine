@@ -7,9 +7,7 @@ use octocrab::models::{IssueState, issues::Comment};
 use octocrab::params::Direction;
 use octocrab::params::issues::Sort::{self, Updated}; // For sorting issues
 use std::fmt::Display;
-use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Issue {
@@ -48,10 +46,10 @@ impl Display for Issue {
 }
 
 pub(crate) struct GitHubClient {
-    pub octocrab: Arc<Mutex<Octocrab>>,
+    pub octocrab: Octocrab,
     repo_owner: String,
     repo_name: String,
-    access_token: Arc<Mutex<String>>,
+    access_token: String,
 }
 
 impl GitHubClient {
@@ -64,24 +62,15 @@ impl GitHubClient {
         println!("Octocrab client with personal access token created successfully.");
 
         Ok(Self {
-            octocrab: Arc::new(Mutex::new(octocrab_with_token)),
+            octocrab: octocrab_with_token,
             repo_owner: config.github_repository_owner.clone(),
             repo_name: config.github_repository_name.clone(),
-            access_token: Arc::new(Mutex::new(config.github_personal_access_token.clone())),
+            access_token: config.github_personal_access_token.clone(),
         })
     }
 
-    async fn execute_with_retry<F, T, Fut>(&self, operation: F) -> Result<T>
-    where
-        F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<T>>,
-    {
-        // Only attempt the operation once, as PATs don't need refreshing
-        operation().await
-    }
-
     pub(crate) async fn clone_repository(&self) -> Result<(TempDir, Repository)> {
-        let token = self.access_token.lock().await.clone();
+        let token = self.access_token.clone();
         let clone_url = format!(
             "https://x-access-token:{}@github.com/{}/{}.git",
             token, self.repo_owner, self.repo_name
@@ -111,10 +100,9 @@ impl GitHubClient {
         let mut page = 1u32;
 
         loop {
+            println!("Fetching comments for issue #{} on page {}", issue_number, page);
             let current_page = page;
-            let comments_page = self
-                .execute_with_retry(|| async {
-                    let octocrab = self.octocrab.lock().await;
+            let comments_page = self.
                     octocrab
                         .issues(&self.repo_owner, &self.repo_name)
                         .list_comments(issue_number)
@@ -125,9 +113,7 @@ impl GitHubClient {
                         .context(format!(
                             "Failed to list comments for issue #{}",
                             issue_number
-                        ))
-                })
-                .await?;
+                        ))?;
 
             if comments_page.items.is_empty() {
                 break;
@@ -152,10 +138,7 @@ impl GitHubClient {
                 let mut page = 1u32;
                 loop {
                     let current_page = page;
-                    let issue_page = self
-                        .execute_with_retry(|| async {
-                            let octocrab = self.octocrab.lock().await;
-                            octocrab
+                    let issue_page = self.octocrab
                                 .issues(&self.repo_owner, &self.repo_name)
                                 .list()
                                 .state(octocrab::params::State::Open)
@@ -168,9 +151,7 @@ impl GitHubClient {
                                 .context(format!(
                                     "Failed to list open issues (page {})",
                                     current_page
-                                ))
-                        })
-                        .await?;
+                                ))?;
 
                     if issue_page.items.is_empty() {
                         break;
@@ -188,10 +169,7 @@ impl GitHubClient {
                 let mut page = 1u32;
                 loop {
                     let current_page = page;
-                    let issue_page = self
-                        .execute_with_retry(|| async {
-                            let octocrab = self.octocrab.lock().await;
-                            octocrab
+                    let issue_page = self.octocrab
                                 .issues(&self.repo_owner, &self.repo_name)
                                 .list()
                                 .state(octocrab::params::State::Closed)
@@ -204,9 +182,7 @@ impl GitHubClient {
                                 .context(format!(
                                     "Failed to list closed issues (page {})",
                                     current_page
-                                ))
-                        })
-                        .await?;
+                                ))?;
 
                     if issue_page.items.is_empty() {
                         break;
@@ -225,10 +201,7 @@ impl GitHubClient {
                 let mut page = 1u32;
                 loop {
                     let current_page = page;
-                    let issue_page = self
-                        .execute_with_retry(|| async {
-                            let octocrab = self.octocrab.lock().await;
-                            octocrab
+                    let issue_page = self.octocrab
                                 .issues(&self.repo_owner, &self.repo_name)
                                 .list()
                                 .state(octocrab::params::State::Open)
@@ -241,9 +214,7 @@ impl GitHubClient {
                                 .context(format!(
                                     "Failed to list open issues (page {})",
                                     current_page
-                                ))
-                        })
-                        .await?;
+                                ))?;
 
                     if issue_page.items.is_empty() {
                         break;
@@ -261,10 +232,7 @@ impl GitHubClient {
                 page = 1;
                 loop {
                     let current_page = page;
-                    let issue_page = self
-                        .execute_with_retry(|| async {
-                            let octocrab = self.octocrab.lock().await;
-                            octocrab
+                    let issue_page = self.octocrab
                                 .issues(&self.repo_owner, &self.repo_name)
                                 .list()
                                 .state(octocrab::params::State::Closed)
@@ -277,9 +245,7 @@ impl GitHubClient {
                                 .context(format!(
                                     "Failed to list closed issues (page {})",
                                     current_page
-                                ))
-                        })
-                        .await?;
+                                ))?;
 
                     if issue_page.items.is_empty() {
                         break;
@@ -298,7 +264,7 @@ impl GitHubClient {
 
         println!("Fetched {} issues", all_issues.len());
         // Convert octocrab::models::Issue to our Issue struct
-        let mut all_issues = all_issues
+        let all_issues = all_issues
             .into_iter()
             .map(|item| Issue {
                 number: item.number,
@@ -317,22 +283,12 @@ impl GitHubClient {
             .collect::<Vec<Issue>>();
 
         println!("Parsed {} issues from the response.", all_issues.len());
-        for issue in &mut all_issues {
-            let comments = self.get_issue_comments(issue.number).await?;
-            for comment in comments {
-                issue
-                    .comments
-                    .push((comment.user.login.clone(), comment.body.unwrap_or_default()));
-            }
-        }
 
         Ok(all_issues)
     }
 
     pub(crate) async fn get_issue(&self, issue_number: u64) -> anyhow::Result<Issue> {
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            let issue = octocrab
+        let issue = self.octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .get(issue_number)
                 .await
@@ -342,6 +298,7 @@ impl GitHubClient {
                 .iter()
                 .map(|c| (c.user.login.clone(), c.body.clone().unwrap_or_default()))
                 .collect::<Vec<(String, String)>>();
+
             Ok(Issue {
                 number: issue.number,
                 title: issue.title,
@@ -356,8 +313,6 @@ impl GitHubClient {
                 comments: comments_and_updates,
                 comments_count: issue.comments as usize,
             })
-        })
-        .await
     }
 
     pub(crate) async fn create_issue(
@@ -370,9 +325,7 @@ impl GitHubClient {
         let body_clone = body.clone();
         let labels_clone = labels.clone();
 
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            let i = octocrab
+            let i = self.octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .create(title_clone.clone())
                 .body(body_clone.clone())
@@ -382,8 +335,6 @@ impl GitHubClient {
                 .context("Failed to create new issue")?;
 
             Ok(i.number)
-        })
-        .await
     }
 
     pub(crate) async fn add_label_to_issue(
@@ -392,15 +343,11 @@ impl GitHubClient {
         label: &str,
     ) -> Result<Vec<octocrab::models::Label>> {
         let label_vec = vec![label.to_string()];
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
+            self.octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .add_labels(issue_number, &label_vec)
                 .await
                 .context(format!("Failed to add label to issue #{}", issue_number))
-        })
-        .await
     }
 
     pub(crate) async fn remove_label_from_issue(
@@ -409,9 +356,7 @@ impl GitHubClient {
         label: &str,
     ) -> Result<Vec<octocrab::models::Label>> {
         let label_str = label.to_string();
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
+            self.octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .remove_label(issue_number, &label_str)
                 .await
@@ -419,14 +364,10 @@ impl GitHubClient {
                     "Failed to remove label '{}' from issue #{}",
                     label_str, issue_number
                 ))
-        })
-        .await
     }
 
     pub(crate) async fn close_issue(&self, issue_number: u64) -> Result<()> {
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
+            self.octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .update(issue_number)
                 .state(IssueState::Closed)
@@ -435,15 +376,11 @@ impl GitHubClient {
                 .context(format!("Failed to close issue #{}", issue_number))?;
 
             Ok(())
-        })
-        .await
     }
 
     pub(crate) async fn comment_on_issue(&self, issue_number: u64, body: &str) -> Result<Comment> {
         let body_str = body.to_string();
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
+            self.octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .create_comment(issue_number, &body_str)
                 .await
@@ -452,15 +389,11 @@ impl GitHubClient {
                     println!("Commented on issue #{}", issue_number);
                     Ok(comment)
                 })
-        })
-        .await
     }
 
     pub(crate) async fn edit_issue_body(&self, issue_number: u64, body: &str) -> Result<()> {
         let body_str = body.to_string();
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
+            self.octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .update(issue_number)
                 .body(&body_str)
@@ -469,15 +402,11 @@ impl GitHubClient {
                 .context(format!("Failed to edit body of issue #{}", issue_number))?;
             println!("Edited body of issue #{}", issue_number);
             Ok(())
-        })
-        .await
     }
 
     pub(crate) async fn edit_issue_title(&self, issue_number: u64, title: &str) -> Result<()> {
         let title_str = title.to_string();
-        self.execute_with_retry(|| async {
-            let octocrab = self.octocrab.lock().await;
-            octocrab
+            self.octocrab
                 .issues(&self.repo_owner, &self.repo_name)
                 .update(issue_number)
                 .title(&title_str)
@@ -486,7 +415,5 @@ impl GitHubClient {
                 .context(format!("Failed to edit title of issue #{}", issue_number))?;
             println!("Edited title of issue #{}", issue_number);
             Ok(())
-        })
-        .await
     }
 }

@@ -107,13 +107,13 @@ impl LlmClient {
                 break;
             }
 
-            if attempts >= 5 {
+            if attempts >= 10 {
                 result = call_result; // Return the last error
                 break;
             }
 
             eprintln!(
-                "LLM call failed (attempt {}/5). Retrying in {:?}. Error: {:?}",
+                "LLM call failed (attempt {}/10). Retrying in {:?}. Error: {:?}",
                 attempts, delay, call_result
             );
             sleep(delay).await;

@@ -323,11 +323,18 @@ impl Agent {
         let mut prompt = self.agent_context.build_contextual_prompt();
         prompt.push_str("\n\nNow, think about what actions to take next.\n");
 
-        let thought = self
+        let thought = match self
             .llm
             .generate_text(&thinking_system_prompt(), &prompt)
             .await
-            .unwrap();
+        {
+            Ok(t) => t,
+            Err(e) => {
+                println!("Failed to generate thought: {}", e);
+                self.agent_context.error = Some(format!("Failed to generate thought: {}", e));
+                return vec![];
+            }
+        };
         println!("Thought: {}", thought);
 
         // split on json
@@ -373,22 +380,13 @@ impl Agent {
                     format!("Failed to list all files: {}", e)
                 }
             },
-            Actions::ReadASingleFile { path } => {
-                let file_content = match self.repo.read_file(&path).await {
-                    Ok(content) => content,
-                    Err(e) => {
-                        println!("Failed to read file {}: {}", path, e);
-                        return format!("Failed to read file {}: {}", path, e);
-                    }
-                };
-                // clip the content to a reasonable length for display
-                let clipped_content = if file_content.len() > 5000 {
-                    format!("{}...", &file_content[..5000])
-                } else {
-                    file_content
-                };
-                clipped_content
-            }
+            Actions::ReadASingleFile { path } => match self.repo.read_file(&path).await {
+                Ok(content) => content,
+                Err(e) => {
+                    println!("Failed to read file {}: {}", path, e);
+                    format!("Failed to read file {}: {}", path, e)
+                }
+            },
             Actions::RunCommand { command } => {
                 match tokio::process::Command::new("sh")
                     .arg("-c")
@@ -401,9 +399,17 @@ impl Agent {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         if output.status.success() {
-                            format!("Command executed successfully.\nStdout: {}\nStderr: {}", stdout, stderr)
+                            format!(
+                                "Command executed successfully.\nStdout: {}\nStderr: {}",
+                                stdout, stderr
+                            )
                         } else {
-                            format!("Command failed with exit code {:?}.\nStdout: {}\nStderr: {}", output.status.code(), stdout, stderr)
+                            format!(
+                                "Command failed with exit code {:?}.\nStdout: {}\nStderr: {}",
+                                output.status.code(),
+                                stdout,
+                                stderr
+                            )
                         }
                     }
                     Err(e) => {
@@ -425,6 +431,7 @@ impl Agent {
                 body,
                 labels,
             } => {
+                let body = format!("{}\nFrom: Pristine.\n\n", body);
                 match self
                     .github
                     .create_issue(title.clone(), body.clone(), labels)
@@ -455,11 +462,7 @@ impl Agent {
                 issue_number,
                 label,
             } => {
-                if let Err(e) = self
-                    .github
-                    .add_label_to_issue(issue_number, &label)
-                    .await
-                {
+                if let Err(e) = self.github.add_label_to_issue(issue_number, &label).await {
                     println!(
                         "Failed to add label '{}' to issue #{}: {}",
                         label, issue_number, e
@@ -505,7 +508,11 @@ impl Agent {
                 }
             }
             Actions::GithubCommentOnIssue { issue_number, body } => {
-                if let Err(e) = self.github.comment_on_issue(issue_number, &body).await {
+                if let Err(e) = self
+                    .github
+                    .comment_on_issue(issue_number, &format!("{body}\nFrom: Pristine"))
+                    .await
+                {
                     println!("Failed to comment on issue #{}: {}", issue_number, e);
                     format!("Failed to comment on issue #{}: {}", issue_number, e)
                 } else {
@@ -537,18 +544,16 @@ impl Agent {
             Actions::RunLLMInference {
                 system_prompt,
                 user_prompt,
-            } => {
-                match self.llm.generate_text(&system_prompt, &user_prompt).await {
-                    Ok(response) => {
-                        println!("LLM response: {}", response);
-                        response
-                    }
-                    Err(e) => {
-                        println!("Failed to run LLM inference: {}", e);
-                        format!("Failed to run LLM inference: {}", e)
-                    }
+            } => match self.llm.generate_text(&system_prompt, &user_prompt).await {
+                Ok(response) => {
+                    println!("LLM response: {}", response);
+                    response
                 }
-            }
+                Err(e) => {
+                    println!("Failed to run LLM inference: {}", e);
+                    format!("Failed to run LLM inference: {}", e)
+                }
+            },
             Actions::Sleep { duration } => {
                 println!("Sleeping for {} seconds...", duration);
                 tokio::time::sleep(std::time::Duration::from_secs(duration)).await;

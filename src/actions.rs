@@ -60,6 +60,8 @@ A few rules to follow:
 - Do not attempt to fix issues let humans or other AI agents handle that. Close the issue if it is fixed.
 - Do not spam comments on issues, only comment when necessary.
 - Keep the minimum amount of issues open at any time.
+- Check issues if new events indicate that they were updated.
+- Do not comment on issues if no additional information is needed.
 
 Actions you can take:
 "#;
@@ -226,7 +228,8 @@ impl Actions {
             Actions::GithubGetIssue { .. } => {
                 "Get a specific issue from the GitHub repository.\
                 The issue is identified by its number, which is a u64.\
-                Returns the details of the issue."
+                Returns the details of the issue including its title, body, labels, state and comments.\
+                Use this often, especially if events indicate that the issue was updated."
             }
             Actions::GithubAddLabelToIssue { .. } => {
                 "Add a label to a specific issue in the GitHub repository.\
