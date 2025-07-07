@@ -87,13 +87,20 @@ I will also store my name in the context for future reference.
 Actions:
 ===
 [
-    "ListAllFiles",
     {
         "StoreOrUpdateMemoryInContext": {
             "key": "My name",
             "value": "Pristine"
         }
+    },
+    {
+        "StoreOrUpdateMemoryInContext": {
+            "key": "My goal",
+            "value": "Manage issues, detect bugs, detect missing documentation, and creating relevant issues."
+        }
     }
+    "ListAllFiles",
+
 ]
 ===
 
