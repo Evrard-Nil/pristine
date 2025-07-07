@@ -98,7 +98,7 @@ Actions:
             "key": "My goal",
             "value": "Manage issues, detect bugs, detect missing documentation, and creating relevant issues."
         }
-    }
+    },
     "ListAllFiles",
 
 ]
