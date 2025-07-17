@@ -1,0 +1,27 @@
+http:
+  port: 5005
+  health_check_path: /
+name: Pristine
+summary: An AI agent that manages issues on a GitHub repository. It detects documentation issues, bugs, and missing tests, creates and manages issues for them, answers human comments, maps TODOs, and prioritizes/closes issues.
+environment_variables:
+  - name: GITHUB_PERSONAL_ACCESS_TOKEN
+    value: <your_github_personal_access_token>
+    description: Your GitHub Personal Access Token with repository permissions to create, read, and update issues.
+  - name: OPENAI_API_KEY
+    value: <your_openai_api_key>
+    description: The OpenAI API key to use for LLM inference. Alternatively, you can set OPENAI_KEY.
+  - name: OPENAI_API_BASE
+    value: https://api.openai.com
+    description: The base URL for the OpenAI API. Defaults to https://api.openai.com.
+  - name: OPENAI_API_MODEL
+    value: gpt-3.5-turbo
+    description: The LLM model to use for chat completions. Defaults to gpt-3.5-turbo.
+  - name: GITHUB_REPOSITORY_OWNER
+    value: <repository_owner>
+    description: The GitHub username or organization name that owns the target repository.
+  - name: GITHUB_REPOSITORY_NAME
+    value: <repository_name>
+    description: The name of the GitHub repository the agent will manage.
+  - name: GITHUB_REPOSITORY_ISSUES_BRANCH
+    value: issues
+    description: The branch in the GitHub repository used for issue management. Defaults to 'issues'.
