@@ -262,10 +262,11 @@ impl GitHubClient {
             _ => return Err(anyhow::anyhow!("Invalid state parameter")),
         }
 
-        println!("Fetched {} issues", all_issues.len());
-        // Convert octocrab::models::Issue to our Issue struct
-        let all_issues = all_issues
+        println!("Fetched {} items (issues and pull requests)", all_issues.len());
+        // Filter out pull requests and convert octocrab::models::Issue to our Issue struct
+        let filtered_issues = all_issues
             .into_iter()
+            .filter(|item| item.pull_request.is_none()) // Filter out pull requests
             .map(|item| Issue {
                 number: item.number,
                 title: item.title,
@@ -282,9 +283,9 @@ impl GitHubClient {
             })
             .collect::<Vec<Issue>>();
 
-        println!("Parsed {} issues from the response.", all_issues.len());
+        println!("Parsed {} issues from the response.", filtered_issues.len());
 
-        Ok(all_issues)
+        Ok(filtered_issues)
     }
 
     pub(crate) async fn get_issue(&self, issue_number: u64) -> anyhow::Result<Issue> {

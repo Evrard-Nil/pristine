@@ -62,6 +62,7 @@ A few rules to follow:
 - Keep the minimum amount of issues open at any time.
 - Check issues if new events indicate that they were updated.
 - Do not comment on issues if no additional information is needed.
+- Only close isses that are resolved through a PR or that are no longer relevant. Be careful when closing issues, as this may lead to loss of important information.
 
 Actions you can take:
 "#;
@@ -112,6 +113,7 @@ Actions:
 #[serde(rename_all = "snake_case")]
 pub enum Actions {
     // Repo I/O
+    #[serde(rename = "run_llm_inference")]
     RunLLMInference {
         system_prompt: String,
         user_prompt: String,
